@@ -1,8 +1,10 @@
 #include <iostream>
 #include <cmath>
 #include <mpi.h>
-#define EPSILON = 0.00001;
-#define TAU = 0.01;
+
+const int SIZE = 10;
+const double EPSILON = 0.00001;
+const double TAU = 0.01;
 
 double* GenerateVectorOfSolution(int size) {
     auto vector = new double[size];
@@ -21,12 +23,18 @@ double* GenerateVectorOfRightSide(int size) {
 }
 
 double* GeneratePartOfMatrix(int rank, int numberOfProcesses, int size) {
-    int matrixSize = size * (size / numberOfProcesses);
+    int matrixSize = 0;
+    if (size % numberOfProcesses != 0) {
+        // ... TODO: do it later.
+    }
+    else {
+        matrixSize = size * (size / numberOfProcesses);
+    }
     auto matrix = new double[matrixSize];
     for (int i = 0; i < matrixSize; ++i) {
         matrix[i] = 1;
     }
-    int rows = (size / numberOfProcesses) + 1 * (size % numberOfProcesses != 0);
+    int rows = (size / numberOfProcesses);
     int startPosition = rows * rank;
     for (int i = 0; i < rows; ++i) {
         if (startPosition > matrixSize) {
@@ -38,7 +46,7 @@ double* GeneratePartOfMatrix(int rank, int numberOfProcesses, int size) {
     return matrix;
 }
 
-void CalculateFirstApproximation(double* vectorOfSolution, const double* vectorOfRightSide, int size) {
+void SetFirstApproximation(double* vectorOfSolution, const double* vectorOfRightSide, int size) {
     for (int i = 0; i < size; ++i) {
         vectorOfSolution[i] = vectorOfRightSide[i];
     }
@@ -61,11 +69,10 @@ void DebugPrint(double* matrix, int n, int m) {
     }
 }
 
-double* MultipleMatrixByVector(double* vector, int size, int numberOfProcesses) {
+double* MultiplyMatrixByVector(double* vector, int size, int numberOfProcesses) {
     auto vectorOfResult = new double[size];
     for (int rank = 0; rank < numberOfProcesses; ++rank) {
         double* partOfMatrix = GeneratePartOfMatrix(rank, numberOfProcesses, size);
-        DebugPrint(partOfMatrix, size/numberOfProcesses, size); // TODO: remove later.
         int columns = size / numberOfProcesses;
         for (int i = 0; i < columns; ++i) {
             vectorOfResult[i + rank * columns] = 0;
@@ -73,48 +80,82 @@ double* MultipleMatrixByVector(double* vector, int size, int numberOfProcesses) 
                 vectorOfResult[i + rank * columns] += partOfMatrix[i * size + j] * vector[j];
             }
         }
+        delete[] partOfMatrix;
     }
     return vectorOfResult;
 }
 
-bool CheckStopCondition() {
-
-}
-
-void MethodOfSimpleIteration(const double* partOfMatrix, double* vectorOfSolution, const double* vectorOfRightSide, int size) {
-
-}
-
-void SimpleMultipleMatrixByVector(double* vector, double* matrix, int size) {
-    auto vectorOfResult = new double[size];
-    for (int j = 0; j < size; ++j) {
-        for (int k = 0; k < size; ++k) {
-            vectorOfResult[k] += matrix[k * size + j] * vector[j];
-        }
-    }
+double* SubtractionOfVectors(double* first, double* second, int size) {
+    auto result = new double[size];
     for (int i = 0; i < size; ++i) {
-        std::cout << vectorOfResult[i] << std::endl;
+        result[i] = first[i] - second[i];
+    }
+    return result;
+}
+
+bool CheckStopCondition(double* vectorOfSolution, double* vectorOfRightSide, int size, int numberOfProcesses) {
+    double firstNorm = GetSecondNormOfVector(SubtractionOfVectors(MultiplyMatrixByVector(vectorOfSolution, size, numberOfProcesses), vectorOfRightSide, size), size);
+    double secondNorm = GetSecondNormOfVector(vectorOfRightSide, size);
+    return (firstNorm / secondNorm) < EPSILON;
+}
+
+double* MultiplyVectorByConst(double* first, int size, double constValue) {
+    auto result = new double[size];
+    for (int i = 0; i < size; ++i) {
+        result[i] = first[i] * constValue;
+    }
+    return result;
+}
+
+void CopyVectorToVector(double* source, double* destination, int size) {
+    for (int i = 0; i < size; ++i) {
+        destination[i] = source[i];
     }
 }
 
-using namespace std;
+void PrintVector(double* vector, int size) {
+    for (int i = 0; i < size; ++i) {
+        std::cout << vector[i] << " ";
+    }
+    std::cout << std::endl;
+}
+
+void CleanUp(double* vectorOfSolution, double* vectorOfRightSide) {
+    delete[] vectorOfSolution;
+    delete[] vectorOfRightSide;
+}
+
+double* MethodOfSimpleIteration(double* vectorOfSolution, double* vectorOfRightSide, int size, int numberOfProcesses) {
+    auto totalResult = new double[size];
+    while (!CheckStopCondition(vectorOfSolution, vectorOfRightSide, size, numberOfProcesses)) {
+        double* resultOfMultiplicationByMatrix = MultiplyMatrixByVector(vectorOfSolution, size, numberOfProcesses);
+        double* resultOfSubtraction = SubtractionOfVectors(resultOfMultiplicationByMatrix, vectorOfRightSide, size);
+        double* resultOfMultiplicationByConst = MultiplyVectorByConst(resultOfSubtraction, size, TAU);
+        totalResult = SubtractionOfVectors(vectorOfSolution, resultOfMultiplicationByConst, size);
+        CopyVectorToVector(totalResult, vectorOfSolution, size);
+        delete[] resultOfMultiplicationByMatrix;
+        delete[] resultOfMultiplicationByConst;
+        delete[] resultOfSubtraction;
+    }
+    CleanUp(vectorOfSolution, vectorOfRightSide);
+    return totalResult;
+}
+
 int main(int argc, char** argv) {
-    if (argc != 2) {
-        cout << "Incorrect input: matrix size" << endl;
-        return 0;
-    }
+    auto vectorOfSolution = GenerateVectorOfSolution(SIZE);
+    auto vectorOfRightSide = GenerateVectorOfRightSide(SIZE);
+    SetFirstApproximation(vectorOfSolution, vectorOfRightSide, SIZE);
 
-    int matrixSize = strtol(argv[1], nullptr, 10);
     int numberOfProcesses = 0;
-//    MPI_Comm_size(MPI_COMM_WORLD, &numberOfProcesses);
-
-    auto vector = new double[3] {0, 5, 10};
-    auto matrix = new double[9] {1, 2, 3, 1, 2, 3, 0, 2, 0};
-//    SimpleMultipleMatrixByVector(vector, matrix, 3);
-    auto res = MultipleMatrixByVector(GenerateVectorOfRightSide(4), 4, 4);
-    for (int i = 0; i < 4; ++i) {
-        cout << res[i] << " ";
+    int currentRank = 0;
+    MPI_Init(&argc, &argv);
+    MPI_Comm_size(MPI_COMM_WORLD, &numberOfProcesses);
+    MPI_Comm_rank(MPI_COMM_WORLD, &currentRank);
+    vectorOfSolution = MethodOfSimpleIteration(vectorOfSolution, vectorOfRightSide, SIZE, numberOfProcesses);
+    if (currentRank == numberOfProcesses - 1) {
+        PrintVector(vectorOfSolution, SIZE);
     }
+    MPI_Finalize();
 
     return 0;
 }

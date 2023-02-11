@@ -23,6 +23,8 @@
   <component name="ChangeListManager">
     <list default="true" id="f3069b23-4a01-48fc-8825-69a49e5f4af5" name="Changes" comment="">
       <change beforePath="$PROJECT_DIR$/../README.md" beforeDir="false" afterPath="$PROJECT_DIR$/../README.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/main.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/main.cpp" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -75,11 +77,6 @@
   }
 }</component>
   <component name="RunManager">
-    <configuration default="true" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" PASS_PARENT_ENVS_2="true">
-      <method v="2">
-        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
-      </method>
-    </configuration>
     <configuration name="lab1-version-1" type="CMakeRunConfiguration" factoryName="Application" PROGRAM_PARAMS="3" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="lab1-version-1" TARGET_NAME="lab1-version-1" CONFIG_NAME="Debug Server" RUN_TARGET_PROJECT_NAME="lab1-version-1" RUN_TARGET_NAME="lab1-version-1">
       <method v="2">
         <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
@@ -100,7 +97,8 @@
       <workItem from="1676085852198" duration="5740000" />
       <workItem from="1676093824975" duration="4000" />
       <workItem from="1676093858283" duration="437000" />
-      <workItem from="1676099763935" duration="1714000" />
+      <workItem from="1676099763935" duration="5383000" />
+      <workItem from="1676118348660" duration="624000" />
     </task>
     <servers />
   </component>
