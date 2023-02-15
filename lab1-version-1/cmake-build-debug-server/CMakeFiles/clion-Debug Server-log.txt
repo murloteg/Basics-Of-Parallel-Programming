@@ -1,4 +1,1 @@
-/usr/bin/cmake -DCMAKE_BUILD_TYPE=Debug -G "CodeBlocks - Unix Makefiles" -S /tmp/tmp.YvjAyZCY4X -B /tmp/tmp.YvjAyZCY4X/cmake-build-debug-server
--- Configuring done
--- Generating done
--- Build files have been written to: /tmp/tmp.YvjAyZCY4X/cmake-build-debug-server
+Failed to launch CMake executable '/usr/bin/cmake': Authentication failed. Configure Disable profile
