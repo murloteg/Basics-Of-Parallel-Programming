@@ -54,15 +54,6 @@ void PrintVector(double* vector, int size) {
     std::cout << std::endl;
 }
 
-void DebugPrint(double* matrix, int n, int m) {
-    for (int i = 0; i < n; ++i) {
-        for (int j = 0; j < m; ++j) {
-            std::cout << matrix[i * m + j] << " ";
-        }
-        std::cout << std::endl;
-    }
-}
-
 double* GeneratePartOfMatrix(int rank, int numberOfProcesses, int size, bool statusOfChangeOfSize) {
     int matrixSize;
     if (statusOfChangeOfSize) {
@@ -71,7 +62,6 @@ double* GeneratePartOfMatrix(int rank, int numberOfProcesses, int size, bool sta
     else {
         matrixSize = ORIGIN_SIZE * (ORIGIN_SIZE / numberOfProcesses);
     }
-
     int columns = (size / numberOfProcesses);
     auto matrix = new double[matrixSize];
     for (int i = 0; i < columns; ++i) {
@@ -103,8 +93,6 @@ double* GeneratePartOfMatrix(int rank, int numberOfProcesses, int size, bool sta
             }
         }
     }
-//    DebugPrint(matrix, columns, size);
-//    printf("\n");
     delete[] arrayWithRowNumbers;
     return matrix;
 }
@@ -169,7 +157,10 @@ void InnerCleanUp(const double* partOfMultiplication, const double* resultOfMult
     delete[] resultOfSubtraction;
 }
 
-void OuterCleanUp(const double* vectorOfSolution, const double* vectorOfRightSide, const double* storageVector) {
+void OuterCleanUp(const double* partOfVectorOfSolution, const double* partOfVectorOfRightSide,
+                  const double* vectorOfSolution, const double* vectorOfRightSide, const double* storageVector) {
+    delete[] partOfVectorOfSolution;
+    delete[] partOfVectorOfRightSide;
     delete[] vectorOfSolution;
     delete[] vectorOfRightSide;
     delete[] storageVector;
@@ -180,18 +171,9 @@ double* MethodOfSimpleIteration(double* partOfVectorOfSolution, int rank, int si
     auto vectorOfRightSide = new double[size];
     int columns = size / numberOfProcesses;
     MPI_Allgather(partOfVectorOfRightSide, columns, MPI_DOUBLE, vectorOfRightSide, columns, MPI_DOUBLE, MPI_COMM_WORLD);
-//    PrintVector(vectorOfRightSide, size);
-//    std::cout << "\n";
-//    PrintVector(partOfVectorOfRightSide, columns);
-//    return nullptr;
-
     auto vectorOfSolution = new double[size];
     SetFirstApproximation(partOfVectorOfSolution, vectorOfRightSide, columns);
     MPI_Allgather(partOfVectorOfSolution, columns, MPI_DOUBLE, vectorOfSolution, columns, MPI_DOUBLE, MPI_COMM_WORLD);
-//    PrintVector(vectorOfSolution, size);
-//    std::cout << "\n";
-//    PrintVector(partOfVectorOfSolution, columns);
-//    return nullptr;
 
     auto totalResult = new double[size];
     auto storageVector = new double[size];
@@ -207,7 +189,7 @@ double* MethodOfSimpleIteration(double* partOfVectorOfSolution, int rank, int si
         upperPartSecondNorm = GetSecondNormOfVector(resultOfSubtraction, size);
         InnerCleanUp(partOfMultiplication, resultOfMultiplicationByConst, resultOfSubtraction);
     }
-    OuterCleanUp(vectorOfSolution, vectorOfRightSide, storageVector);
+    OuterCleanUp(partOfVectorOfSolution, partOfVectorOfRightSide, vectorOfSolution, vectorOfRightSide, storageVector);
     return totalResult;
 }
 
@@ -244,27 +226,8 @@ int main(int argc, char** argv) {
         PrintVector(vectorOfSolution, ORIGIN_SIZE);
         std::cout << "[Time]: " << end - start << " (sec)." << std::endl;
     }
-
-//    auto test = GeneratePartOfVectorOfRightSide(4, 0, 2);
-//    PrintVector(test, 4/2);
     delete[] vectorOfSolution;
     MPI_Finalize();
 
     return 0;
 }
-
-/* 4/3 -> 6/3
- * origin:
- * 2 1 1 1
- * 1 2 1 1
- * 1 1 2 1
- * 1 1 1 2
- *
- * after:
- * 2 1 1 1 0 0
- * 1 2 1 1 0 0
- * 1 1 2 1 0 0
- * 1 1 1 2 0 0
- * 0 0 0 0 0 0
- * 0 0 0 0 0 0
- */
