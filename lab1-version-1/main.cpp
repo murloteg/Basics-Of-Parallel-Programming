@@ -50,31 +50,30 @@ double* GeneratePartOfMatrix(int rank, int numberOfProcesses, int size, bool sta
     else {
         matrixSize = ORIGIN_SIZE * (ORIGIN_SIZE / numberOfProcesses);
     }
-
-    int numberOfRows = (size / numberOfProcesses);
+    int columns = (size / numberOfProcesses);
     auto matrix = new double[matrixSize];
-    for (int i = 0; i < numberOfRows; ++i) {
+    for (int i = 0; i < columns; ++i) {
         for (int j = 0; j < ORIGIN_SIZE; ++j) {
             matrix[i * size + j] = 1;
         }
     }
-    int startPosition = numberOfRows * rank;
-    for (int i = 0; i < numberOfRows; ++i) {
+    int startPosition = columns * rank;
+    for (int i = 0; i < columns; ++i) {
         if (startPosition > matrixSize) {
             break;
         }
         matrix[startPosition] = 2;
         startPosition = startPosition + size + 1;
     }
-    auto arrayWithRowNumbers = new int[numberOfRows];
-    for (int i = 0; i < numberOfRows; ++i) {
-        arrayWithRowNumbers[i] = i + rank * numberOfRows + 1;
+    auto arrayWithRowNumbers = new int[columns];
+    for (int i = 0; i < columns; ++i) {
+        arrayWithRowNumbers[i] = i + rank * columns + 1;
     }
 
     int numberOfExtraRows = GetNumberOfExtraRows(size);
     int extraRowPosition = size - numberOfExtraRows;
-    if (GetLastElementFromArray(arrayWithRowNumbers, numberOfRows) > extraRowPosition) {
-        for (int i = 0; i < numberOfRows; ++i) {
+    if (GetLastElementFromArray(arrayWithRowNumbers, columns) > extraRowPosition) {
+        for (int i = 0; i < columns; ++i) {
             if (arrayWithRowNumbers[i] > extraRowPosition) {
                 for (int j = 0; j < size; ++j) {
                     matrix[i * size + j] = 0;
