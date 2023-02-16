@@ -2,8 +2,8 @@
 #include <cmath>
 #include <mpi.h>
 
-const int ORIGIN_SIZE = 4096;
-const double EPSILON = 1e-8;
+const int ORIGIN_SIZE = 4095;
+const double EPSILON = 1e-5;
 const double TAU = 1e-5;
 
 double* GeneratePartOfVectorOfSolution(int size, int numberOfProcesses) {
@@ -111,10 +111,9 @@ double GetSecondNormOfVector(const double* vector, int size) {
     return sqrt(totalSum);
 }
 
-double* MultiplyMatrixByVector(const double* vector, int size, int rank, int numberOfProcesses, bool statusOfChangeOfSize) {
+void MultiplyMatrixByVector(double* vectorOfResult, const double* vector, int size, int rank, int numberOfProcesses, bool statusOfChangeOfSize) {
     double* partOfMatrix = GeneratePartOfMatrix(rank, numberOfProcesses, size, statusOfChangeOfSize);
     int columns = size / numberOfProcesses;
-    auto vectorOfResult = new double[columns];
     for (int i = 0; i < columns; ++i) {
         vectorOfResult[i] = 0;
         for (int j = 0; j < size; ++j) {
@@ -122,27 +121,22 @@ double* MultiplyMatrixByVector(const double* vector, int size, int rank, int num
         }
     }
     delete[] partOfMatrix;
-    return vectorOfResult;
 }
 
-double* SubtractionOfVectors(const double* first, const double* second, int size) {
-    auto result = new double[size];
+void SubtractionOfVectors(double* result, const double* first, const double* second, int size) {
     for (int i = 0; i < size; ++i) {
         result[i] = first[i] - second[i];
     }
-    return result;
 }
 
 bool CheckStopCondition(double firstNorm, double secondNorm) {
     return (firstNorm / secondNorm) < EPSILON;
 }
 
-double* MultiplyVectorByConst(const double* first, int size, double constValue) {
-    auto result = new double[size];
+void MultiplyVectorByConst(double* result, const double* first, int size, double constValue) {
     for (int i = 0; i < size; ++i) {
         result[i] = first[i] * constValue;
     }
-    return result;
 }
 
 void CopyVectorToVector(const double* source, double* destination, int size) {
@@ -151,19 +145,18 @@ void CopyVectorToVector(const double* source, double* destination, int size) {
     }
 }
 
-void InnerCleanUp(const double* partOfMultiplication, const double* resultOfMultiplicationByConst, const double* resultOfSubtraction) {
-    delete[] partOfMultiplication;
-    delete[] resultOfMultiplicationByConst;
-    delete[] resultOfSubtraction;
-}
-
-void OuterCleanUp(const double* partOfVectorOfSolution, const double* partOfVectorOfRightSide,
-                  const double* vectorOfSolution, const double* vectorOfRightSide, const double* storageVector) {
+void CleanUp(const double* partOfVectorOfSolution, const double* partOfVectorOfRightSide,
+                  const double* vectorOfSolution, const double* vectorOfRightSide, const double* storageVector,
+                  const double* resultOfMultiplicationByConst, const double* partOfMultiplication,
+                  const double* resultOfSubtraction) {
     delete[] partOfVectorOfSolution;
     delete[] partOfVectorOfRightSide;
     delete[] vectorOfSolution;
     delete[] vectorOfRightSide;
     delete[] storageVector;
+    delete[] resultOfMultiplicationByConst;
+    delete[] partOfMultiplication;
+    delete[] resultOfSubtraction;
 }
 
 double* MethodOfSimpleIteration(double* partOfVectorOfSolution, int rank, int size, int numberOfProcesses, bool statusOfChangeOfSize) {
@@ -177,19 +170,22 @@ double* MethodOfSimpleIteration(double* partOfVectorOfSolution, int rank, int si
 
     auto totalResult = new double[size];
     auto storageVector = new double[size];
+    auto resultOfMultiplicationByConst = new double[size];
+    auto partOfMultiplication = new double[columns];
     double lowerPartSecondNorm = GetSecondNormOfVector(vectorOfRightSide, size);
-    double upperPartSecondNorm = GetSecondNormOfVector(MultiplyVectorByConst(vectorOfRightSide, size, -1), size);
+    MultiplyVectorByConst(resultOfMultiplicationByConst, vectorOfRightSide, size, -1);
+    double upperPartSecondNorm = GetSecondNormOfVector(resultOfMultiplicationByConst, size);
+    auto resultOfSubtraction = new double[size];
     while (!CheckStopCondition(upperPartSecondNorm, lowerPartSecondNorm)) {
-        double* partOfMultiplication = MultiplyMatrixByVector(vectorOfSolution, size, rank, numberOfProcesses, statusOfChangeOfSize);
+        MultiplyMatrixByVector(partOfMultiplication, vectorOfSolution, size, rank, numberOfProcesses, statusOfChangeOfSize);
         MPI_Allgather(partOfMultiplication, columns, MPI_DOUBLE, storageVector, columns, MPI_DOUBLE, MPI_COMM_WORLD);
-        double* resultOfSubtraction = SubtractionOfVectors(storageVector, vectorOfRightSide, size);
-        double* resultOfMultiplicationByConst = MultiplyVectorByConst(resultOfSubtraction, size, TAU);
-        totalResult = SubtractionOfVectors(vectorOfSolution, resultOfMultiplicationByConst, size);
+        SubtractionOfVectors(resultOfSubtraction, storageVector, vectorOfRightSide, size);
+        MultiplyVectorByConst(resultOfMultiplicationByConst, resultOfSubtraction, size, TAU);
+        SubtractionOfVectors(totalResult, vectorOfSolution, resultOfMultiplicationByConst, size);
         CopyVectorToVector(totalResult, vectorOfSolution, size);
         upperPartSecondNorm = GetSecondNormOfVector(resultOfSubtraction, size);
-        InnerCleanUp(partOfMultiplication, resultOfMultiplicationByConst, resultOfSubtraction);
     }
-    OuterCleanUp(partOfVectorOfSolution, partOfVectorOfRightSide, vectorOfSolution, vectorOfRightSide, storageVector);
+    CleanUp(partOfVectorOfSolution, partOfVectorOfRightSide, vectorOfSolution, vectorOfRightSide, storageVector, resultOfMultiplicationByConst, partOfMultiplication, resultOfSubtraction);
     return totalResult;
 }
 
