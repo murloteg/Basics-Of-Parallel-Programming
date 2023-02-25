@@ -2,7 +2,7 @@
 #include <cmath>
 #include <mpi.h>
 
-const int ORIGIN_SIZE = 1024;
+const int ORIGIN_SIZE = 3000;
 const double EPSILON = 1e-5;
 const double TAU = 1e-5;
 
@@ -51,9 +51,6 @@ void PrintVector(double* vector, int size) {
     for (int i = 0; i < size; ++i) {
         std::cout << vector[i] << " ";
     }
-//    for (int i = 0; i < size; ++i) {
-//        printf("%.3f ", vector[i]);
-//    }
     std::cout << std::endl;
 }
 
@@ -130,8 +127,7 @@ void MultiplyMatrixByVector(double* vectorOfResult, const double* partOfVector, 
     int currentRank = 0;
     for (int i = 0; i < numberOfRows; ++i) {
         vectorOfResult[i] = 0;
-        MPI_Bcast(bufferOfPartOfVector, numberOfRows, MPI_DOUBLE, currentRank,
-                  MPI_COMM_WORLD);
+        MPI_Bcast(bufferOfPartOfVector, numberOfRows, MPI_DOUBLE, currentRank, MPI_COMM_WORLD);
         for (int j = 0; j < size; ++j) {
             vectorOfResult[i] += partOfMatrix[i * numberOfRows + j] * bufferOfPartOfVector[j % numberOfRows];
         }
@@ -177,27 +173,22 @@ double* MethodOfSimpleIteration(double* partOfVectorOfSolution, int rank, int si
     auto partOfResultOfMultiplicationByConst = new double[numberOfRows];
     auto partOfMultiplication = new double[numberOfRows];
     double lowerPartSecondNorm = GetSecondNormOfVector(partOfVectorOfRightSide, numberOfRows, numberOfProcesses);
-    
-    MultiplyVectorByConst(partOfResultOfMultiplicationByConst, partOfVectorOfRightSide, numberOfRows, -1); // piece.
-    double upperPartSecondNorm = GetSecondNormOfVector(partOfResultOfMultiplicationByConst, numberOfRows, numberOfProcesses); // total
-    std::cout << upperPartSecondNorm << " " << lowerPartSecondNorm << "\n";
+    MultiplyVectorByConst(partOfResultOfMultiplicationByConst, partOfVectorOfRightSide, numberOfRows, -1);
+    double upperPartSecondNorm = GetSecondNormOfVector(partOfResultOfMultiplicationByConst, numberOfRows, numberOfProcesses);
 
     auto partOfResultOfSubtraction = new double[numberOfRows];
     while (!CheckStopCondition(upperPartSecondNorm, lowerPartSecondNorm)) {
-        MultiplyMatrixByVector(partOfMultiplication, partOfVectorOfSolution, size, rank, numberOfProcesses); // piece.
+        MultiplyMatrixByVector(partOfMultiplication, partOfVectorOfSolution, size, rank, numberOfProcesses);
         SubtractionOfVectors(partOfResultOfSubtraction, partOfMultiplication, partOfVectorOfRightSide, numberOfRows);
         MultiplyVectorByConst(partOfResultOfMultiplicationByConst, partOfResultOfSubtraction, numberOfRows, TAU);
         SubtractionOfVectors(partOfTotalResult, partOfVectorOfSolution, partOfResultOfMultiplicationByConst, numberOfRows);
         CopyVectorToVector(partOfTotalResult, partOfVectorOfSolution, numberOfRows);
         upperPartSecondNorm = GetSecondNormOfVector(partOfResultOfSubtraction, numberOfRows, numberOfProcesses);
-//        if (rank == 0) {
-//            std::cout << upperPartSecondNorm << " " << lowerPartSecondNorm << "\n";
-//        }
     }
-    auto totalVector = new double[size];
-    MPI_Allgather(partOfVectorOfSolution, numberOfRows, MPI_DOUBLE, totalVector, numberOfRows, MPI_DOUBLE, MPI_COMM_WORLD);
+    auto totalResult = new double[size];
+    MPI_Allgather(partOfVectorOfSolution, numberOfRows, MPI_DOUBLE, totalResult, numberOfRows, MPI_DOUBLE, MPI_COMM_WORLD);
     CleanUp(partOfVectorOfSolution, partOfVectorOfRightSide, partOfResultOfMultiplicationByConst, partOfMultiplication, partOfResultOfSubtraction);
-    return totalVector;
+    return totalResult;
 }
 
 bool IsCorrectSize(int size, int numberOfProcesses) {
@@ -231,28 +222,6 @@ int main(int argc, char** argv) {
         PrintVector(vectorOfSolution, ORIGIN_SIZE);
         std::cout << "[Time]: " << end - start << " (sec)." << std::endl;
     }
-
-    /* UNIT MULT! */
-    auto mult = GeneratePartOfVectorOfRightSide(matrixSize, currentRank, numberOfProcesses);
-    auto res = new double[matrixSize];
-//    MultiplyMatrixByVector(res, mult, matrixSize, currentRank, numberOfProcesses);
-//    if (currentRank == 0) {
-//        PrintVector(res, matrixSize / numberOfProcesses);
-//    }
-
-    /* UNIT SUB! */
-//    auto mult1 = GeneratePartOfVectorOfSolution(matrixSize, numberOfProcesses);
-//    SubtractionOfVectors(res, mult1, mult, matrixSize / numberOfProcesses);
-//    if (currentRank == 0) {
-//        PrintVector(res, matrixSize / numberOfProcesses);
-//    }
-
-    /* UNIT MULT BY CONST! */
-//    MultiplyVectorByConst(res, mult, matrixSize / numberOfProcesses, 0.5);
-//    if (currentRank == 0) {
-//        PrintVector(res, matrixSize / numberOfProcesses);
-//    }
-
     delete[] vectorOfSolution;
     MPI_Finalize();
 
