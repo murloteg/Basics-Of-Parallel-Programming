@@ -2,7 +2,7 @@
 #include <cmath>
 #include <mpi.h>
 
-const int ORIGIN_SIZE = 4095;
+const int ORIGIN_SIZE = 3000;
 const double EPSILON = 1e-5;
 const double TAU = 1e-5;
 
@@ -14,12 +14,12 @@ double* GenerateVectorOfSolution(int size) {
     return vector;
 }
 
-double* GenerateVectorOfRightSide(int size, bool statusOfChangeOfSize) {
+double* GenerateVectorOfRightSide(int size) {
     auto vector = new double[size];
     for (int i = 0; i < ORIGIN_SIZE; ++i) {
         vector[i] = ORIGIN_SIZE + 1;
     }
-    if (statusOfChangeOfSize) {
+    if (size != ORIGIN_SIZE) {
         for (int i = ORIGIN_SIZE; i < size; ++i) {
             vector[i] = 0;
         }
@@ -42,38 +42,32 @@ int GetLastElementFromArray(int* array, int size) {
     return array[size - 1];
 }
 
-double* GeneratePartOfMatrix(int rank, int numberOfProcesses, int size, bool statusOfChangeOfSize) {
-    int matrixSize;
-    if (statusOfChangeOfSize) {
-        matrixSize = size * (size / numberOfProcesses);
-    }
-    else {
-        matrixSize = ORIGIN_SIZE * (ORIGIN_SIZE / numberOfProcesses);
-    }
-    int columns = (size / numberOfProcesses);
+double* GeneratePartOfMatrix(int rank, int numberOfProcesses, int size) {
+    int matrixSize = size * (size / numberOfProcesses);
+    int numberOfRows = (size / numberOfProcesses);
     auto matrix = new double[matrixSize];
-    for (int i = 0; i < columns; ++i) {
+    for (int i = 0; i < numberOfRows; ++i) {
         for (int j = 0; j < ORIGIN_SIZE; ++j) {
             matrix[i * size + j] = 1;
         }
     }
-    int startPosition = columns * rank;
-    for (int i = 0; i < columns; ++i) {
+    int startPosition = numberOfRows * rank;
+    for (int i = 0; i < numberOfRows; ++i) {
         if (startPosition > matrixSize) {
             break;
         }
         matrix[startPosition] = 2;
         startPosition = startPosition + size + 1;
     }
-    auto arrayWithRowNumbers = new int[columns];
-    for (int i = 0; i < columns; ++i) {
-        arrayWithRowNumbers[i] = i + rank * columns + 1;
+    auto arrayWithRowNumbers = new int[numberOfRows];
+    for (int i = 0; i < numberOfRows; ++i) {
+        arrayWithRowNumbers[i] = i + rank * numberOfRows + 1;
     }
 
     int numberOfExtraRows = GetNumberOfExtraRows(size);
     int extraRowPosition = size - numberOfExtraRows;
-    if (GetLastElementFromArray(arrayWithRowNumbers, columns) > extraRowPosition) {
-        for (int i = 0; i < columns; ++i) {
+    if (GetLastElementFromArray(arrayWithRowNumbers, numberOfRows) > extraRowPosition) {
+        for (int i = 0; i < numberOfRows; ++i) {
             if (arrayWithRowNumbers[i] > extraRowPosition) {
                 for (int j = 0; j < size; ++j) {
                     matrix[i * size + j] = 0;
@@ -99,10 +93,10 @@ double GetSecondNormOfVector(const double* vector, int size) {
     return sqrt(totalSum);
 }
 
-void MultiplyMatrixByVector(double* vectorOfResult, const double* vector, int size, int rank, int numberOfProcesses, bool statusOfChangeOfSize) {
-    double* partOfMatrix = GeneratePartOfMatrix(rank, numberOfProcesses, size, statusOfChangeOfSize);
-    int columns = size / numberOfProcesses;
-    for (int i = 0; i < columns; ++i) {
+void MultiplyMatrixByVector(double* vectorOfResult, const double* vector, int size, int rank, int numberOfProcesses) {
+    double* partOfMatrix = GeneratePartOfMatrix(rank, numberOfProcesses, size);
+    int numberOfRows = size / numberOfProcesses;
+    for (int i = 0; i < numberOfRows; ++i) {
         vectorOfResult[i] = 0;
         for (int j = 0; j < size; ++j) {
             vectorOfResult[i] += partOfMatrix[i * size + j] * vector[j];
@@ -144,21 +138,23 @@ void CleanUp(const double* vectorOfSolution, const double* vectorOfRightSide, co
     delete[] resultOfSubtraction;
 }
 
-double* MethodOfSimpleIteration(double* vectorOfSolution, int rank, int size, int numberOfProcesses, bool statusOfChangeOfSize) {
-    auto vectorOfRightSide = GenerateVectorOfRightSide(size, statusOfChangeOfSize);
+double* MethodOfSimpleIteration(double* vectorOfSolution, int rank, int size, int numberOfProcesses) {
+    auto vectorOfRightSide = GenerateVectorOfRightSide(size);
     SetFirstApproximation(vectorOfSolution, vectorOfRightSide, size);
-    int columns = size / numberOfProcesses;
+
+    int numberOfRows = size / numberOfProcesses;
     auto totalResult = new double[size];
     auto storageVector = new double[size];
     auto resultOfMultiplicationByConst = new double[size];
-    auto partOfMultiplication = new double[columns];
+    auto partOfMultiplication = new double[numberOfRows];
     double lowerPartSecondNorm = GetSecondNormOfVector(vectorOfRightSide, size);
     MultiplyVectorByConst(resultOfMultiplicationByConst, vectorOfRightSide, size, -1);
     double upperPartSecondNorm = GetSecondNormOfVector(resultOfMultiplicationByConst, size);
+
     auto resultOfSubtraction = new double[size];
     while (!CheckStopCondition(upperPartSecondNorm, lowerPartSecondNorm)) {
-        MultiplyMatrixByVector(partOfMultiplication, vectorOfSolution, size, rank, numberOfProcesses, statusOfChangeOfSize);
-        MPI_Allgather(partOfMultiplication, columns, MPI_DOUBLE, storageVector, columns, MPI_DOUBLE, MPI_COMM_WORLD);
+        MultiplyMatrixByVector(partOfMultiplication, vectorOfSolution, size, rank, numberOfProcesses);
+        MPI_Allgather(partOfMultiplication, numberOfRows, MPI_DOUBLE, storageVector, numberOfRows, MPI_DOUBLE, MPI_COMM_WORLD);
         SubtractionOfVectors(resultOfSubtraction, storageVector, vectorOfRightSide, size);
         MultiplyVectorByConst(resultOfMultiplicationByConst, resultOfSubtraction, size, TAU);
         SubtractionOfVectors(totalResult, vectorOfSolution, resultOfMultiplicationByConst, size);
@@ -188,15 +184,13 @@ int main(int argc, char** argv) {
     MPI_Comm_size(MPI_COMM_WORLD, &numberOfProcesses);
     MPI_Comm_rank(MPI_COMM_WORLD, &currentRank);
 
-    bool statusOfChangeOfSize = false;
     int matrixSize = ORIGIN_SIZE;
     if (!IsCorrectSize(ORIGIN_SIZE, numberOfProcesses)) {
         matrixSize = FindCorrectSize(ORIGIN_SIZE, numberOfProcesses);
-        statusOfChangeOfSize = true;
     }
     auto vectorOfSolution = GenerateVectorOfSolution(matrixSize);
     double start = MPI_Wtime();
-    vectorOfSolution = MethodOfSimpleIteration(vectorOfSolution, currentRank, matrixSize, numberOfProcesses, statusOfChangeOfSize);
+    vectorOfSolution = MethodOfSimpleIteration(vectorOfSolution, currentRank, matrixSize, numberOfProcesses);
     double end = MPI_Wtime();
     if (currentRank == numberOfProcesses - 1) {
         PrintVector(vectorOfSolution, ORIGIN_SIZE);
