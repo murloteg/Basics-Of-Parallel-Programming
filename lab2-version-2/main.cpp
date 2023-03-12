@@ -154,7 +154,11 @@ double* MethodOfSimpleIteration(double* vectorOfSolution, int size) {
             for (int i = 0; i < size; ++i) {
                 upperPartSecondNorm += resultOfSubtraction[i] * resultOfSubtraction[i];
             }
-            upperPartSecondNorm = sqrt(upperPartSecondNorm);
+
+            #pragma omp single
+            {
+                upperPartSecondNorm = sqrt(upperPartSecondNorm);
+            }
         }
     }
 
