@@ -2,12 +2,13 @@
 #include <cmath>
 #include <sys/time.h>
 
-const int ORIGIN_SIZE = 2048;
+const int ORIGIN_SIZE = 2049;
 const double EPSILON = 1e-5;
 const double TAU = 1e-5;
 
 double* GenerateVectorOfSolution(int size) {
     double* vector = new double[size];
+#pragma omp parallel for
     for (int i = 0; i < size; ++i) {
         vector[i] = 0;
     }
@@ -16,6 +17,7 @@ double* GenerateVectorOfSolution(int size) {
 
 double* GenerateVectorOfRightSide(int size) {
     double* vector = new double[size];
+#pragma omp parallel for
     for (int i = 0; i < ORIGIN_SIZE; ++i) {
         vector[i] = ORIGIN_SIZE + 1;
     }
@@ -59,6 +61,7 @@ void SetFirstApproximation(double* vectorOfSolution, const double* vectorOfRight
 
 double GetSecondNormOfVector(const double* vector, int size) {
     double totalSum = 0;
+#pragma omp parallel for reduction(+: totalSum)
     for (int i = 0; i < size; ++i) {
         totalSum += vector[i] * vector[i];
     }
