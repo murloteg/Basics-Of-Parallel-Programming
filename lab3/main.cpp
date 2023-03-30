@@ -2,10 +2,10 @@
 #include <mpi.h>
 
 enum SizeConsts {
-    NUMBER_OF_LINES_A = 3,
-    NUMBER_OF_COLUMNS_A = 6, /* must be the same with next parameter! */
-    NUMBER_OF_LINES_B = 6, /* must be the same with previous parameter! */
-    NUMBER_OF_COLUMNS_B = 4,
+    NUMBER_OF_LINES_A = 2,
+    NUMBER_OF_COLUMNS_A = 4, /* must be the same with next parameter! */
+    NUMBER_OF_LINES_B = 4, /* must be the same with previous parameter! */
+    NUMBER_OF_COLUMNS_B = 8,
     HORIZONTAL_NUMBER_OF_NODES = 0, /* first parameter of grid: p1 */
     VERTICAL_NUMBER_OF_NODES = 0 /* second parameter of grid: p2 */
 };
@@ -17,6 +17,10 @@ enum DimensionConsts {
 enum Axes {
     VERTICAL_AXIS = 0,
     HORIZONTAL_AXIS = 1
+};
+
+enum Errors {
+    INCORRECT_MATRIX_SIZES = -1
 };
 
 double* GenerateMatrixA() {
@@ -81,23 +85,51 @@ void InvokeBcastForHorizontalCommunicator(double* partOfMatrixA, int sizeOfPartO
     MPI_Bcast(partOfMatrixA, sizeOfPartOfMatrixA, MPI_DOUBLE, rootRank, HORIZONTAL_COMMUNICATOR);
 }
 
-void CleanUp(double* matrixA, double* matrixB, double* matrixC, double* receiveBufferForMatrixA,
-             double* receiveBufferForMatrixB) {
+void InvokeBcastForVerticalCommunicator(double* partOfMatrixB, int sizeOfPartOfMatrixB, MPI_Comm VERTICAL_COMMUNICATOR) {
+    int coords[1] = {0};
+    int rootRank = 0;
+    MPI_Cart_rank(VERTICAL_COMMUNICATOR, coords, &rootRank);
+    MPI_Bcast(partOfMatrixB, sizeOfPartOfMatrixB, MPI_DOUBLE, rootRank, VERTICAL_COMMUNICATOR);
+}
+
+void MatrixMultiplication(double* firstMatrix, int firstMatrixLines, int firstMatrixColumns,
+                          double* secondMatrix, int secondMatrixColumns, double* resultMatrix) {
+    double partialSum = 0;
+    for (int i = 0; i < firstMatrixLines; ++i) {
+        for (int j = 0; j < secondMatrixColumns; ++j) {
+            for (int k = 0; k < firstMatrixColumns; ++k) {
+                partialSum += firstMatrix[i * firstMatrixColumns + k] * secondMatrix[k * secondMatrixColumns + j];
+            }
+            resultMatrix[i * secondMatrixColumns + j] = partialSum;
+            partialSum = 0;
+        }
+    }
+}
+
+void CleanUp(double* matrixA, double* matrixB, double* matrixC, double* partOfMatrixA,
+             double* partOfMatrixB, double* partOfMatrixC) {
     delete[] (matrixA);
     delete[] (matrixB);
     delete[] (matrixC);
-    delete[] (receiveBufferForMatrixA);
-    delete[] (receiveBufferForMatrixB);
+    delete[] (partOfMatrixA);
+    delete[] (partOfMatrixB);
+    delete[] (partOfMatrixC);
 }
 
 int main(int argc, char** argv) {
+    if (NUMBER_OF_COLUMNS_A != NUMBER_OF_LINES_B) {
+        std::cout << "INCORRECT MATRIX SIZES!" << std::endl;
+        return INCORRECT_MATRIX_SIZES;
+    }
+
     int numberOfProcesses;
     int currentRank;
     MPI_Init(&argc, &argv);
     MPI_Comm_size(MPI_COMM_WORLD, &numberOfProcesses);
     MPI_Comm_rank(MPI_COMM_WORLD, &currentRank);
 
-    int dims[MAX_DIMENSION] = {HORIZONTAL_NUMBER_OF_NODES, VERTICAL_NUMBER_OF_NODES};
+    /* Format of dims: (Y ; X) */
+    int dims[MAX_DIMENSION] = {VERTICAL_NUMBER_OF_NODES, HORIZONTAL_NUMBER_OF_NODES};
     int periods[MAX_DIMENSION] = {0, 0};
     int reorder = 0;
     MPI_Comm MPI_CUSTOM_2D_GRID;
@@ -125,6 +157,7 @@ int main(int argc, char** argv) {
     if (currentRankCoords[0] == 0 && currentRankCoords[1] == 0) {
         matrixA = GenerateMatrixA();
         matrixB = GenerateMatrixB();
+        DebugPrint(matrixB, NUMBER_OF_LINES_B, NUMBER_OF_COLUMNS_B);
     }
 
     int sizeOfMatrixA = NUMBER_OF_LINES_A * NUMBER_OF_COLUMNS_A;
@@ -143,7 +176,7 @@ int main(int argc, char** argv) {
 
     MPI_Datatype COLUMN_TYPE;
     /* 1 - distance between elements in column */
-    MPI_Type_vector(NUMBER_OF_LINES_B, 1, NUMBER_OF_COLUMNS_B, MPI_DOUBLE, &COLUMN_TYPE);
+    MPI_Type_vector(NUMBER_OF_LINES_B, NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS], NUMBER_OF_COLUMNS_B, MPI_DOUBLE, &COLUMN_TYPE);
     MPI_Type_commit(&COLUMN_TYPE);
 
     MPI_Datatype RESIZED_COLUMN_TYPE;
@@ -158,12 +191,24 @@ int main(int argc, char** argv) {
                                                  RESIZED_COLUMN_TYPE);
     }
 
+    InvokeBcastForVerticalCommunicator(receiveBufferForMatrixB, sizeOfMatrixB / dims[VERTICAL_AXIS], VERTICAL_NEIGHBORS);
     /* [DEBUG] Scatter matrixB [DEBUG]
         std::cout << "(Scatter B) CURRENT RANK: " << currentRank << "\n";
         DebugPrint(receiveBufferForMatrixB, NUMBER_OF_LINES_B, NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS]);
      */
 
-    CleanUp(matrixA, matrixB, matrixC, receiveBufferForMatrixA, receiveBufferForMatrixB);
+    double* partOfMatrixC = new double[NUMBER_OF_LINES_A * NUMBER_OF_COLUMNS_B / (dims[VERTICAL_AXIS] * dims[HORIZONTAL_AXIS])];
+
+    /* Multiplication part of matrix A by part of matrix B in current node */
+    MatrixMultiplication(receiveBufferForMatrixA, NUMBER_OF_LINES_A / dims[VERTICAL_AXIS], NUMBER_OF_COLUMNS_A,
+                         receiveBufferForMatrixB, NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS], partOfMatrixC);
+
+    MPI_Barrier(MPI_COMM_WORLD);
+    if (currentRank == 0) {
+        DebugPrint(partOfMatrixC, NUMBER_OF_LINES_A / dims[VERTICAL_AXIS], NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS]);
+    }
+
+    CleanUp(matrixA, matrixB, matrixC, receiveBufferForMatrixA, receiveBufferForMatrixB, partOfMatrixC);
 
     MPI_Type_free(&COLUMN_TYPE);
     MPI_Type_free(&RESIZED_COLUMN_TYPE);
@@ -173,34 +218,7 @@ int main(int argc, char** argv) {
     return 0;
 }
 
-
 /*
- * DEBUG GRIND INFO:
-    if (currentRank == 0) {
-        std::cout << dims[0] << " " << dims[1] << "\n";
-    }
-    MPI_Barrier(MPI_COMM_WORLD);
-    std::cout << currentRank << "::::: " << coords[0] << " " << coords[1] << "\n";
- */
-
-/*
- * COLUMN_TYPE_TEST
-    if (currentRank == 0) {
-        double matrix[6][3];
-        double count = 10;
-        for (int i = 0; i < 6; ++i) {
-            for (int j = 0; j < 3; ++j) {
-                matrix[i][j] = count;
-                ++count;
-            }
-        }
-        MPI_Send(&matrix[0][0], 1, COLUMN_TYPE, 1, 0, MPI_COMM_WORLD);
-    } else if (currentRank == 1) {
-        double recvBuf[6];
-        MPI_Recv(recvBuf, 6, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-        std::cout << "TEST:\n";
-        for (int i = 0; i < 6; ++i) {
-            std::cout << recvBuf[i] << " ";
-        }
-    }
+ * EXAMPLES:
+ * A = 2x4, B = 4x8; NP = 4. RESULT OF NODE (0, 0): "112 118 124 130".
  */
