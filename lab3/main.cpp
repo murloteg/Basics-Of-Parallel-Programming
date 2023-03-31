@@ -78,18 +78,11 @@ void SendMatrixBFromRootToHorizontalNeighbors(double* matrixB, double* receiveBu
                 NUMBER_OF_LINES_B * NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS], MPI_DOUBLE, rootRank, COMMUNICATOR);
 }
 
-void InvokeBcastForHorizontalCommunicator(double* partOfMatrixA, int sizeOfPartOfMatrixA, MPI_Comm HORIZONTAL_COMMUNICATOR) {
+void InvokeBcastForCommunicator(double* partOfMatrixA, int sizeOfPartOfMatrixA, MPI_Comm COMMUNICATOR) {
     int coords[1] = {0};
     int rootRank = 0;
-    MPI_Cart_rank(HORIZONTAL_COMMUNICATOR, coords, &rootRank);
-    MPI_Bcast(partOfMatrixA, sizeOfPartOfMatrixA, MPI_DOUBLE, rootRank, HORIZONTAL_COMMUNICATOR);
-}
-
-void InvokeBcastForVerticalCommunicator(double* partOfMatrixB, int sizeOfPartOfMatrixB, MPI_Comm VERTICAL_COMMUNICATOR) {
-    int coords[1] = {0};
-    int rootRank = 0;
-    MPI_Cart_rank(VERTICAL_COMMUNICATOR, coords, &rootRank);
-    MPI_Bcast(partOfMatrixB, sizeOfPartOfMatrixB, MPI_DOUBLE, rootRank, VERTICAL_COMMUNICATOR);
+    MPI_Cart_rank(COMMUNICATOR, coords, &rootRank);
+    MPI_Bcast(partOfMatrixA, sizeOfPartOfMatrixA, MPI_DOUBLE, rootRank, COMMUNICATOR);
 }
 
 void MatrixMultiplication(double* firstMatrix, int firstMatrixLines, int firstMatrixColumns,
@@ -104,7 +97,7 @@ void MatrixMultiplication(double* firstMatrix, int firstMatrixLines, int firstMa
             partialSum = 0;
         }
     }
-}
+} // TODO: do it faster
 
 void CleanUp(double* matrixA, double* matrixB, double* matrixC, double* partOfMatrixA,
              double* partOfMatrixB, double* partOfMatrixC) {
@@ -147,35 +140,36 @@ int main(int argc, char** argv) {
     MPI_Comm HORIZONTAL_NEIGHBORS;
     MPI_Comm VERTICAL_NEIGHBORS;
 
-    int horizontal_remain_dims[MAX_DIMENSION] = {false, true};
-    int vertical_remain_dims[MAX_DIMENSION] = {true, false};
-    MPI_Cart_sub(MPI_CUSTOM_2D_GRID, horizontal_remain_dims, &HORIZONTAL_NEIGHBORS);
-    MPI_Cart_sub(MPI_CUSTOM_2D_GRID, vertical_remain_dims, &VERTICAL_NEIGHBORS);
+    int horizontalRemainDims[MAX_DIMENSION] = {false, true};
+    int verticalRemainDims[MAX_DIMENSION] = {true, false};
+    MPI_Cart_sub(MPI_CUSTOM_2D_GRID, horizontalRemainDims, &HORIZONTAL_NEIGHBORS);
+    MPI_Cart_sub(MPI_CUSTOM_2D_GRID, verticalRemainDims, &VERTICAL_NEIGHBORS);
 
     int currentRankCoords[MAX_DIMENSION] = {0, 0};
     MPI_Cart_coords(MPI_CUSTOM_2D_GRID, currentRank, MAX_DIMENSION, currentRankCoords);
+
+    /* "Root" node in the 2D-grid */
     if (currentRankCoords[0] == 0 && currentRankCoords[1] == 0) {
         matrixA = GenerateMatrixA();
         matrixB = GenerateMatrixB();
-        DebugPrint(matrixB, NUMBER_OF_LINES_B, NUMBER_OF_COLUMNS_B);
+        matrixC = new double[NUMBER_OF_LINES_A * NUMBER_OF_COLUMNS_B];
     }
 
     int sizeOfMatrixA = NUMBER_OF_LINES_A * NUMBER_OF_COLUMNS_A;
     double* receiveBufferForMatrixA = new double[sizeOfMatrixA / dims[VERTICAL_AXIS]];
-    if (currentRank % dims[HORIZONTAL_AXIS] == 0) {
+    if (currentRankCoords[HORIZONTAL_AXIS] == 0) {
         SendMatrixAFromRootToVerticalNeighbors(matrixA, sizeOfMatrixA, receiveBufferForMatrixA, VERTICAL_NEIGHBORS,
                                                dims[VERTICAL_AXIS]);
     }
 
-    InvokeBcastForHorizontalCommunicator(receiveBufferForMatrixA, sizeOfMatrixA / dims[VERTICAL_AXIS], HORIZONTAL_NEIGHBORS);
+    InvokeBcastForCommunicator(receiveBufferForMatrixA, sizeOfMatrixA / dims[VERTICAL_AXIS], HORIZONTAL_NEIGHBORS);
     /* [DEBUG] Scatter and Bcast for matrixA [DEBUG]
-        std::cout << "(Scatter A) CURRENT RANK: " << currentRank << "\n";
+        std::cout << "(After Scatter A) CURRENT RANK: " << currentRank << "\n";
         DebugPrint(receiveBufferForMatrixA, NUMBER_OF_LINES_A / dims[VERTICAL_AXIS], NUMBER_OF_COLUMNS_A);
      */
 
 
     MPI_Datatype COLUMN_TYPE;
-    /* 1 - distance between elements in column */
     MPI_Type_vector(NUMBER_OF_LINES_B, NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS], NUMBER_OF_COLUMNS_B, MPI_DOUBLE, &COLUMN_TYPE);
     MPI_Type_commit(&COLUMN_TYPE);
 
@@ -186,26 +180,35 @@ int main(int argc, char** argv) {
 
     int sizeOfMatrixB = NUMBER_OF_LINES_B * NUMBER_OF_COLUMNS_B;
     double* receiveBufferForMatrixB = new double[sizeOfMatrixB / dims[HORIZONTAL_AXIS]];
-    if (currentRank < dims[HORIZONTAL_AXIS]) {
+    if (currentRankCoords[VERTICAL_AXIS] == 0) {
         SendMatrixBFromRootToHorizontalNeighbors(matrixB, receiveBufferForMatrixB, dims, HORIZONTAL_NEIGHBORS,
                                                  RESIZED_COLUMN_TYPE);
     }
 
-    InvokeBcastForVerticalCommunicator(receiveBufferForMatrixB, sizeOfMatrixB / dims[VERTICAL_AXIS], VERTICAL_NEIGHBORS);
-    /* [DEBUG] Scatter matrixB [DEBUG]
-        std::cout << "(Scatter B) CURRENT RANK: " << currentRank << "\n";
+    InvokeBcastForCommunicator(receiveBufferForMatrixB, sizeOfMatrixB / dims[VERTICAL_AXIS], VERTICAL_NEIGHBORS);
+    /* [DEBUG] Scatter and Bcast for matrixB [DEBUG]
+        std::cout << "(After Scatter B) CURRENT RANK: " << currentRank << "\n";
         DebugPrint(receiveBufferForMatrixB, NUMBER_OF_LINES_B, NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS]);
      */
 
-    double* partOfMatrixC = new double[NUMBER_OF_LINES_A * NUMBER_OF_COLUMNS_B / (dims[VERTICAL_AXIS] * dims[HORIZONTAL_AXIS])];
-
     /* Multiplication part of matrix A by part of matrix B in current node */
+    double* partOfMatrixC = new double[NUMBER_OF_LINES_A * NUMBER_OF_COLUMNS_B / (dims[VERTICAL_AXIS] * dims[HORIZONTAL_AXIS])];
     MatrixMultiplication(receiveBufferForMatrixA, NUMBER_OF_LINES_A / dims[VERTICAL_AXIS], NUMBER_OF_COLUMNS_A,
                          receiveBufferForMatrixB, NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS], partOfMatrixC);
 
-    MPI_Barrier(MPI_COMM_WORLD);
     if (currentRank == 0) {
         DebugPrint(partOfMatrixC, NUMBER_OF_LINES_A / dims[VERTICAL_AXIS], NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS]);
+    }
+
+    // TODO: gather matrix C from all nodes.
+
+    /* "Check" block */
+    if (currentRank == 0) {
+        double* checkMatrix = new double[NUMBER_OF_LINES_A * NUMBER_OF_COLUMNS_B];
+        MatrixMultiplication(matrixA, NUMBER_OF_LINES_A, NUMBER_OF_COLUMNS_A, matrixB, NUMBER_OF_COLUMNS_B, checkMatrix);
+        DebugPrint(checkMatrix, NUMBER_OF_LINES_A, NUMBER_OF_COLUMNS_B);
+        DebugPrint(matrixC, NUMBER_OF_LINES_A, NUMBER_OF_COLUMNS_B);
+        delete[] checkMatrix;
     }
 
     CleanUp(matrixA, matrixB, matrixC, receiveBufferForMatrixA, receiveBufferForMatrixB, partOfMatrixC);
