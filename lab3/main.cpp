@@ -2,10 +2,10 @@
 #include <mpi.h>
 
 enum SizeConsts {
-    NUMBER_OF_LINES_A = 2,
-    NUMBER_OF_COLUMNS_A = 4, /* must be the same with next parameter! */
-    NUMBER_OF_LINES_B = 4, /* must be the same with previous parameter! */
-    NUMBER_OF_COLUMNS_B = 8,
+    NUMBER_OF_LINES_A = 8,
+    NUMBER_OF_COLUMNS_A = 6, /* must be the same with next parameter! */
+    NUMBER_OF_LINES_B = 6, /* must be the same with previous parameter! */
+    NUMBER_OF_COLUMNS_B = 12,
     HORIZONTAL_NUMBER_OF_NODES = 0, /* first parameter of grid: p1 */
     VERTICAL_NUMBER_OF_NODES = 0 /* second parameter of grid: p2 */
 };
@@ -87,17 +87,54 @@ void InvokeBcastForCommunicator(double* partOfMatrixA, int sizeOfPartOfMatrixA, 
 
 void MatrixMultiplication(double* firstMatrix, int firstMatrixLines, int firstMatrixColumns,
                           double* secondMatrix, int secondMatrixColumns, double* resultMatrix) {
-    double partialSum = 0;
     for (int i = 0; i < firstMatrixLines; ++i) {
-        for (int j = 0; j < secondMatrixColumns; ++j) {
-            for (int k = 0; k < firstMatrixColumns; ++k) {
-                partialSum += firstMatrix[i * firstMatrixColumns + k] * secondMatrix[k * secondMatrixColumns + j];
+        for (int k = 0; k < firstMatrixColumns; ++k) {
+            for (int j = 0; j < secondMatrixColumns; ++j) {
+                resultMatrix[i * secondMatrixColumns + j] += firstMatrix[i * firstMatrixColumns + k] * secondMatrix[k * secondMatrixColumns + j];
             }
-            resultMatrix[i * secondMatrixColumns + j] = partialSum;
-            partialSum = 0;
         }
     }
-} // TODO: do it faster
+}
+
+void PrepareGathervArguments(int* receiveCounts, int* offsets,  int numberOfLinesPartMatrixC,
+                             int numberOfColumnsPartMatrixC, int numberOfProcesses, int* dims) {
+    for (int i = 0; i < numberOfProcesses; ++i) {
+        receiveCounts[i] = 1;
+    }
+
+    for (int i = 0; i < dims[VERTICAL_AXIS]; ++i) { // FIXME
+        for (int j = 0; j < dims[HORIZONTAL_AXIS]; ++j) {
+            offsets[i * dims[VERTICAL_AXIS] + j] = (i * numberOfLinesPartMatrixC * NUMBER_OF_COLUMNS_B +
+                    j * numberOfColumnsPartMatrixC) / (NUMBER_OF_COLUMNS_B / dims[VERTICAL_AXIS]);
+            std::cout << "pos: (" << i << " : " << j << "), offset: " << offsets[i * dims[VERTICAL_AXIS] + j] << "\n";
+        }
+    }
+}
+
+void MergeAllPartialResultsIntoResultMatrix(double* resultMatrix, double* partOfMatrixC, int numberOfLinesPartMatrixC,
+                                            int numberOfColumnsPartMatrixC, int numberOfProcesses,
+                                            int* dims, MPI_Comm MPI_CUSTOM_2D_GRID) {
+    int coords[2] = {0, 0};
+    int rootRank = 0;
+    MPI_Cart_rank(MPI_CUSTOM_2D_GRID, coords, &rootRank);
+
+    MPI_Datatype BLOCK_OF_MATRIX_C;
+    MPI_Type_vector(numberOfLinesPartMatrixC, numberOfColumnsPartMatrixC, NUMBER_OF_COLUMNS_B, MPI_DOUBLE, &BLOCK_OF_MATRIX_C);
+    MPI_Type_commit(&BLOCK_OF_MATRIX_C);
+
+    MPI_Datatype RESIZED_BLOCK_OF_MATRIX_C;
+    MPI_Type_create_resized(BLOCK_OF_MATRIX_C, 0, numberOfColumnsPartMatrixC * sizeof(double), &RESIZED_BLOCK_OF_MATRIX_C);
+    MPI_Type_commit(&RESIZED_BLOCK_OF_MATRIX_C);
+
+    int receiveCounts[numberOfProcesses];
+    int offsets[numberOfProcesses];
+
+    PrepareGathervArguments(receiveCounts, offsets, numberOfLinesPartMatrixC, numberOfColumnsPartMatrixC, numberOfProcesses, dims);
+    MPI_Gatherv(partOfMatrixC, numberOfLinesPartMatrixC * numberOfColumnsPartMatrixC, MPI_DOUBLE, resultMatrix, receiveCounts, offsets, RESIZED_BLOCK_OF_MATRIX_C, rootRank, MPI_CUSTOM_2D_GRID);
+
+    MPI_Type_free(&BLOCK_OF_MATRIX_C);
+    MPI_Type_free(&RESIZED_BLOCK_OF_MATRIX_C);
+}
 
 void CleanUp(double* matrixA, double* matrixB, double* matrixC, double* partOfMatrixA,
              double* partOfMatrixB, double* partOfMatrixC) {
@@ -148,8 +185,10 @@ int main(int argc, char** argv) {
     int currentRankCoords[MAX_DIMENSION] = {0, 0};
     MPI_Cart_coords(MPI_CUSTOM_2D_GRID, currentRank, MAX_DIMENSION, currentRankCoords);
 
+    double start = MPI_Wtime();
+
     /* "Root" node in the 2D-grid */
-    if (currentRankCoords[0] == 0 && currentRankCoords[1] == 0) {
+    if (currentRankCoords[VERTICAL_AXIS] == 0 && currentRankCoords[HORIZONTAL_AXIS] == 0) {
         matrixA = GenerateMatrixA();
         matrixB = GenerateMatrixB();
         matrixC = new double[NUMBER_OF_LINES_A * NUMBER_OF_COLUMNS_B];
@@ -196,14 +235,18 @@ int main(int argc, char** argv) {
     MatrixMultiplication(receiveBufferForMatrixA, NUMBER_OF_LINES_A / dims[VERTICAL_AXIS], NUMBER_OF_COLUMNS_A,
                          receiveBufferForMatrixB, NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS], partOfMatrixC);
 
+    int numberOfLinesPartMatrixC = NUMBER_OF_LINES_A / dims[VERTICAL_AXIS];
+    int numberOfColumnsPartMatrixC = NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS];
     if (currentRank == 0) {
-        DebugPrint(partOfMatrixC, NUMBER_OF_LINES_A / dims[VERTICAL_AXIS], NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS]);
+        std::cout << "LINES: " << numberOfLinesPartMatrixC << " COLUMNS: " << numberOfColumnsPartMatrixC << "\n";
+        DebugPrint(partOfMatrixC, numberOfLinesPartMatrixC, numberOfColumnsPartMatrixC);
     }
 
-    // TODO: gather matrix C from all nodes.
+    MergeAllPartialResultsIntoResultMatrix(matrixC, partOfMatrixC, numberOfLinesPartMatrixC, numberOfColumnsPartMatrixC, numberOfProcesses, dims, MPI_CUSTOM_2D_GRID);
+    double end = MPI_Wtime();
 
     /* "Check" block */
-    if (currentRank == 0) {
+    if (currentRankCoords[HORIZONTAL_AXIS] == 0 && currentRankCoords[VERTICAL_AXIS] == 0) {
         double* checkMatrix = new double[NUMBER_OF_LINES_A * NUMBER_OF_COLUMNS_B];
         MatrixMultiplication(matrixA, NUMBER_OF_LINES_A, NUMBER_OF_COLUMNS_A, matrixB, NUMBER_OF_COLUMNS_B, checkMatrix);
         DebugPrint(checkMatrix, NUMBER_OF_LINES_A, NUMBER_OF_COLUMNS_B);
@@ -213,6 +256,10 @@ int main(int argc, char** argv) {
 
     CleanUp(matrixA, matrixB, matrixC, receiveBufferForMatrixA, receiveBufferForMatrixB, partOfMatrixC);
 
+    if (currentRank == 0) {
+        std::cout << "Elapsed time [sec]: " << end - start << "\n";
+    }
+
     MPI_Type_free(&COLUMN_TYPE);
     MPI_Type_free(&RESIZED_COLUMN_TYPE);
 
@@ -220,8 +267,3 @@ int main(int argc, char** argv) {
 
     return 0;
 }
-
-/*
- * EXAMPLES:
- * A = 2x4, B = 4x8; NP = 4. RESULT OF NODE (0, 0): "112 118 124 130".
- */
