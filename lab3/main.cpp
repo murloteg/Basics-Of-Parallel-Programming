@@ -3,8 +3,8 @@
 
 enum SizeConsts {
     NUMBER_OF_LINES_A = 8,
-    NUMBER_OF_COLUMNS_A = 8, /* must be the same with next parameter! */
-    NUMBER_OF_LINES_B = 8, /* must be the same with previous parameter! */
+    NUMBER_OF_COLUMNS_A = 6, /* must be the same with next parameter! */
+    NUMBER_OF_LINES_B = 6, /* must be the same with previous parameter! */
     NUMBER_OF_COLUMNS_B = 12,
     HORIZONTAL_NUMBER_OF_NODES = 0, /* first parameter of grid: p1 */
     VERTICAL_NUMBER_OF_NODES = 0 /* second parameter of grid: p2 */
@@ -41,6 +41,7 @@ double* GenerateMatrixB() {
     int value = 2;
     for (int i = 0; i < NUMBER_OF_LINES_B; ++i) {
         for (int j = 0; j < NUMBER_OF_COLUMNS_B; ++j) {
+            matrixB[currentPosition] = 0;
             if (i == j) {
                 matrixB[currentPosition] = value;
             }
@@ -102,11 +103,11 @@ void MatrixMultiplication(double* firstMatrix, int firstMatrixLines, int firstMa
 void PrepareGathervArguments(int* receiveCounts, int* offsets, int* dims) {
     for (int i = 0; i < dims[VERTICAL_AXIS]; ++i) {
         for (int j = 0; j < dims[HORIZONTAL_AXIS]; ++j) {
-            offsets[i * dims[VERTICAL_AXIS] + j] =
+            offsets[i * dims[HORIZONTAL_AXIS] + j] =
                     ((i * NUMBER_OF_LINES_A * NUMBER_OF_COLUMNS_B / dims[VERTICAL_AXIS]) +
                      j * NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS]) / (NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS]);
-            std::cout << "pos: (" << j << " : " << i << "), offset: " << offsets[i * dims[VERTICAL_AXIS] + j] << "\n";
-            receiveCounts[i * dims[VERTICAL_AXIS] + j] = 1;
+            std::cout << "pos: (" << j << " : " << i << "), offset: " << offsets[i * dims[HORIZONTAL_AXIS] + j] << "\n";
+            receiveCounts[i * dims[HORIZONTAL_AXIS] + j] = 1;
         }
     }
 }
@@ -125,7 +126,6 @@ void MergeAllPartialResultsIntoResultMatrix(double* resultMatrix, double* partOf
     MPI_Datatype RESIZED_BLOCK_OF_MATRIX_C;
     MPI_Type_create_resized(BLOCK_OF_MATRIX_C, 0, numberOfColumnsPartMatrixC * sizeof(double), &RESIZED_BLOCK_OF_MATRIX_C);
     MPI_Type_commit(&RESIZED_BLOCK_OF_MATRIX_C);
-    // OK!
 
     int receiveCounts[numberOfProcesses];
     int offsets[numberOfProcesses];
@@ -239,11 +239,9 @@ int main(int argc, char** argv) {
      */
 
     /* Multiplication part of matrix A by part of matrix B in current node */
-    MPI_Barrier(MPI_CUSTOM_2D_GRID);
     double* partOfMatrixC = new double[NUMBER_OF_LINES_A * NUMBER_OF_COLUMNS_B / (dims[VERTICAL_AXIS] * dims[HORIZONTAL_AXIS])];
     MatrixMultiplication(receiveBufferForMatrixA, NUMBER_OF_LINES_A / dims[VERTICAL_AXIS], NUMBER_OF_COLUMNS_A,
                          receiveBufferForMatrixB, NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS], partOfMatrixC);
-
 
     int numberOfLinesPartMatrixC = NUMBER_OF_LINES_A / dims[VERTICAL_AXIS]; // OK!
     int numberOfColumnsPartMatrixC = NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS]; // OK!
@@ -278,3 +276,14 @@ int main(int argc, char** argv) {
 
     return 0;
 }
+
+/*
+    int sizeShift = NUMBER_OF_LINES_A  * dims[HORIZONTAL_AXIS] / dims[VERTICAL_AXIS];
+    for (int i = 0; i < dims[VERTICAL_AXIS]; ++i) {   // 5
+        for (int j = 0; j < dims[HORIZONTAL_AXIS]; ++j) {   // 1
+            receiveCounts[i * dims[HORIZONTAL_AXIS] + j] = 1;
+            offsets[i * dims[HORIZONTAL_AXIS] + j] =  i * sizeShift  + j;
+            std::cout << "pos: (" << i << " : " << j << "), offset: " << offsets[i * dims[HORIZONTAL_AXIS] + j] << "\n";
+        }
+    }
+ */
