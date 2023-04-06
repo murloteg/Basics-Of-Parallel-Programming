@@ -38,7 +38,7 @@ double* GenerateMatrixA() {
 double* GenerateMatrixB() {
     double* matrixB = new double[NUMBER_OF_LINES_B * NUMBER_OF_COLUMNS_B];
     int currentPosition = 0;
-    int value = 2;
+    int value = 10;
     for (int i = 0; i < NUMBER_OF_LINES_B; ++i) {
         for (int j = 0; j < NUMBER_OF_COLUMNS_B; ++j) {
             matrixB[currentPosition] = 0;
@@ -100,13 +100,11 @@ void MatrixMultiplication(double* firstMatrix, int firstMatrixLines, int firstMa
     }
 }
 
-void PrepareGathervArguments(int* receiveCounts, int* offsets, int* dims) {
+void PrepareGathervArguments(int numberOfLinesPartMatrixC, int numberOfColumnsPartMatrixC, int* receiveCounts, int* offsets, int* dims) {
     for (int i = 0; i < dims[VERTICAL_AXIS]; ++i) {
         for (int j = 0; j < dims[HORIZONTAL_AXIS]; ++j) {
-            offsets[i * dims[HORIZONTAL_AXIS] + j] =
-                    ((i * NUMBER_OF_LINES_A * NUMBER_OF_COLUMNS_B / dims[VERTICAL_AXIS]) +
-                     j * NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS]) / (NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS]);
-            std::cout << "pos: (" << j << " : " << i << "), offset: " << offsets[i * dims[HORIZONTAL_AXIS] + j] << "\n";
+            offsets[i * dims[HORIZONTAL_AXIS] + j] = ((i * NUMBER_OF_COLUMNS_B * numberOfLinesPartMatrixC) +
+                     j * numberOfColumnsPartMatrixC) / (NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS]);
             receiveCounts[i * dims[HORIZONTAL_AXIS] + j] = 1;
         }
     }
@@ -136,7 +134,7 @@ void MergeAllPartialResultsIntoResultMatrix(double* resultMatrix, double* partOf
     MPI_Cart_coords(MPI_CUSTOM_2D_GRID, currentRank, MAX_DIMENSION, currentRankCoords);
 
     if (currentRankCoords[VERTICAL_AXIS] == 0 && currentRankCoords[HORIZONTAL_AXIS] == 0) {
-        PrepareGathervArguments(receiveCounts, offsets, dims);
+        PrepareGathervArguments(numberOfLinesPartMatrixC, numberOfColumnsPartMatrixC, receiveCounts, offsets, dims);
     }
     MPI_Gatherv(partOfMatrixC, numberOfLinesPartMatrixC * numberOfColumnsPartMatrixC, MPI_DOUBLE, resultMatrix, receiveCounts, offsets, RESIZED_BLOCK_OF_MATRIX_C, rootRank, MPI_CUSTOM_2D_GRID);
 
@@ -239,16 +237,11 @@ int main(int argc, char** argv) {
      */
 
     /* Multiplication part of matrix A by part of matrix B in current node */
-    double* partOfMatrixC = new double[NUMBER_OF_LINES_A * NUMBER_OF_COLUMNS_B / (dims[VERTICAL_AXIS] * dims[HORIZONTAL_AXIS])];
-    MatrixMultiplication(receiveBufferForMatrixA, NUMBER_OF_LINES_A / dims[VERTICAL_AXIS], NUMBER_OF_COLUMNS_A,
-                         receiveBufferForMatrixB, NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS], partOfMatrixC);
-
-    int numberOfLinesPartMatrixC = NUMBER_OF_LINES_A / dims[VERTICAL_AXIS]; // OK!
-    int numberOfColumnsPartMatrixC = NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS]; // OK!
-    if (currentRank == 1) {
-        std::cout << "LINES: " << numberOfLinesPartMatrixC << " COLUMNS: " << numberOfColumnsPartMatrixC << "\n";
-        DebugPrint(partOfMatrixC, numberOfLinesPartMatrixC, numberOfColumnsPartMatrixC);
-    }
+    int numberOfLinesPartMatrixC = NUMBER_OF_LINES_A / dims[VERTICAL_AXIS];
+    int numberOfColumnsPartMatrixC = NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS];
+    double* partOfMatrixC = new double[numberOfLinesPartMatrixC * numberOfColumnsPartMatrixC];
+    MatrixMultiplication(receiveBufferForMatrixA, numberOfLinesPartMatrixC, NUMBER_OF_COLUMNS_A,
+                         receiveBufferForMatrixB, numberOfColumnsPartMatrixC, partOfMatrixC);
 
     MPI_Barrier(MPI_CUSTOM_2D_GRID);
     MergeAllPartialResultsIntoResultMatrix(matrixC, partOfMatrixC, numberOfLinesPartMatrixC, numberOfColumnsPartMatrixC, numberOfProcesses, dims, MPI_CUSTOM_2D_GRID);
@@ -266,7 +259,7 @@ int main(int argc, char** argv) {
     CleanUp(matrixA, matrixB, matrixC, receiveBufferForMatrixA, receiveBufferForMatrixB, partOfMatrixC);
 
     if (currentRank == 0) {
-        std::cout << "Elapsed time [sec]: " << end - start << "\n";
+        std::cout << "Elapsed time: " << end - start << " [sec]\n";
     }
 
     MPI_Type_free(&COLUMN_TYPE);
@@ -276,14 +269,3 @@ int main(int argc, char** argv) {
 
     return 0;
 }
-
-/*
-    int sizeShift = NUMBER_OF_LINES_A  * dims[HORIZONTAL_AXIS] / dims[VERTICAL_AXIS];
-    for (int i = 0; i < dims[VERTICAL_AXIS]; ++i) {   // 5
-        for (int j = 0; j < dims[HORIZONTAL_AXIS]; ++j) {   // 1
-            receiveCounts[i * dims[HORIZONTAL_AXIS] + j] = 1;
-            offsets[i * dims[HORIZONTAL_AXIS] + j] =  i * sizeShift  + j;
-            std::cout << "pos: (" << i << " : " << j << "), offset: " << offsets[i * dims[HORIZONTAL_AXIS] + j] << "\n";
-        }
-    }
- */
