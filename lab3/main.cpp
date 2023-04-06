@@ -3,8 +3,8 @@
 
 enum SizeConsts {
     NUMBER_OF_LINES_A = 8,
-    NUMBER_OF_COLUMNS_A = 6, /* must be the same with next parameter! */
-    NUMBER_OF_LINES_B = 6, /* must be the same with previous parameter! */
+    NUMBER_OF_COLUMNS_A = 8, /* must be the same with next parameter! */
+    NUMBER_OF_LINES_B = 8, /* must be the same with previous parameter! */
     NUMBER_OF_COLUMNS_B = 12,
     HORIZONTAL_NUMBER_OF_NODES = 0, /* first parameter of grid: p1 */
     VERTICAL_NUMBER_OF_NODES = 0 /* second parameter of grid: p2 */
@@ -38,9 +38,12 @@ double* GenerateMatrixA() {
 double* GenerateMatrixB() {
     double* matrixB = new double[NUMBER_OF_LINES_B * NUMBER_OF_COLUMNS_B];
     int currentPosition = 0;
+    int value = 2;
     for (int i = 0; i < NUMBER_OF_LINES_B; ++i) {
         for (int j = 0; j < NUMBER_OF_COLUMNS_B; ++j) {
-            matrixB[currentPosition] = currentPosition;
+            if (i == j) {
+                matrixB[currentPosition] = value;
+            }
             ++currentPosition;
         }
     }
@@ -96,17 +99,14 @@ void MatrixMultiplication(double* firstMatrix, int firstMatrixLines, int firstMa
     }
 }
 
-void PrepareGathervArguments(int* receiveCounts, int* offsets,  int numberOfLinesPartMatrixC,
-                             int numberOfColumnsPartMatrixC, int numberOfProcesses, int* dims) {
-    for (int i = 0; i < numberOfProcesses; ++i) {
-        receiveCounts[i] = 1;
-    }
-
-    for (int i = 0; i < dims[VERTICAL_AXIS]; ++i) { // FIXME
+void PrepareGathervArguments(int* receiveCounts, int* offsets, int* dims) {
+    for (int i = 0; i < dims[VERTICAL_AXIS]; ++i) {
         for (int j = 0; j < dims[HORIZONTAL_AXIS]; ++j) {
-            offsets[i * dims[VERTICAL_AXIS] + j] = (i * numberOfLinesPartMatrixC * NUMBER_OF_COLUMNS_B +
-                    j * numberOfColumnsPartMatrixC) / (NUMBER_OF_COLUMNS_B / dims[VERTICAL_AXIS]);
-            std::cout << "pos: (" << i << " : " << j << "), offset: " << offsets[i * dims[VERTICAL_AXIS] + j] << "\n";
+            offsets[i * dims[VERTICAL_AXIS] + j] =
+                    ((i * NUMBER_OF_LINES_A * NUMBER_OF_COLUMNS_B / dims[VERTICAL_AXIS]) +
+                     j * NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS]) / (NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS]);
+            std::cout << "pos: (" << j << " : " << i << "), offset: " << offsets[i * dims[VERTICAL_AXIS] + j] << "\n";
+            receiveCounts[i * dims[VERTICAL_AXIS] + j] = 1;
         }
     }
 }
@@ -114,7 +114,7 @@ void PrepareGathervArguments(int* receiveCounts, int* offsets,  int numberOfLine
 void MergeAllPartialResultsIntoResultMatrix(double* resultMatrix, double* partOfMatrixC, int numberOfLinesPartMatrixC,
                                             int numberOfColumnsPartMatrixC, int numberOfProcesses,
                                             int* dims, MPI_Comm MPI_CUSTOM_2D_GRID) {
-    int coords[2] = {0, 0};
+    int coords[MAX_DIMENSION] = {0, 0};
     int rootRank = 0;
     MPI_Cart_rank(MPI_CUSTOM_2D_GRID, coords, &rootRank);
 
@@ -125,11 +125,19 @@ void MergeAllPartialResultsIntoResultMatrix(double* resultMatrix, double* partOf
     MPI_Datatype RESIZED_BLOCK_OF_MATRIX_C;
     MPI_Type_create_resized(BLOCK_OF_MATRIX_C, 0, numberOfColumnsPartMatrixC * sizeof(double), &RESIZED_BLOCK_OF_MATRIX_C);
     MPI_Type_commit(&RESIZED_BLOCK_OF_MATRIX_C);
+    // OK!
 
     int receiveCounts[numberOfProcesses];
     int offsets[numberOfProcesses];
 
-    PrepareGathervArguments(receiveCounts, offsets, numberOfLinesPartMatrixC, numberOfColumnsPartMatrixC, numberOfProcesses, dims);
+    int currentRank;
+    MPI_Comm_rank(MPI_CUSTOM_2D_GRID, &currentRank);
+    int currentRankCoords[MAX_DIMENSION] = {0, 0};
+    MPI_Cart_coords(MPI_CUSTOM_2D_GRID, currentRank, MAX_DIMENSION, currentRankCoords);
+
+    if (currentRankCoords[VERTICAL_AXIS] == 0 && currentRankCoords[HORIZONTAL_AXIS] == 0) {
+        PrepareGathervArguments(receiveCounts, offsets, dims);
+    }
     MPI_Gatherv(partOfMatrixC, numberOfLinesPartMatrixC * numberOfColumnsPartMatrixC, MPI_DOUBLE, resultMatrix, receiveCounts, offsets, RESIZED_BLOCK_OF_MATRIX_C, rootRank, MPI_CUSTOM_2D_GRID);
 
     MPI_Type_free(&BLOCK_OF_MATRIX_C);
@@ -148,7 +156,7 @@ void CleanUp(double* matrixA, double* matrixB, double* matrixC, double* partOfMa
 
 int main(int argc, char** argv) {
     if (NUMBER_OF_COLUMNS_A != NUMBER_OF_LINES_B) {
-        std::cout << "INCORRECT MATRIX SIZES!" << std::endl;
+        std::cerr << "INCORRECT MATRIX SIZES!" << std::endl;
         return INCORRECT_MATRIX_SIZES;
     }
 
@@ -167,7 +175,7 @@ int main(int argc, char** argv) {
     MPI_Cart_create(MPI_COMM_WORLD, MAX_DIMENSION, dims, periods, reorder, &MPI_CUSTOM_2D_GRID);
 
     if (currentRank == 0) {
-        std::cout << "[DEBUG] DIMS: " << dims[0] << " " << dims[1] << "\n";
+        std::cout << "[DEBUG] DIMS: " << dims[HORIZONTAL_AXIS] << " " << dims[VERTICAL_AXIS] << "\n";
     }
 
     double* matrixA = NULL;
@@ -224,24 +232,27 @@ int main(int argc, char** argv) {
                                                  RESIZED_COLUMN_TYPE);
     }
 
-    InvokeBcastForCommunicator(receiveBufferForMatrixB, sizeOfMatrixB / dims[VERTICAL_AXIS], VERTICAL_NEIGHBORS);
+    InvokeBcastForCommunicator(receiveBufferForMatrixB, sizeOfMatrixB / dims[HORIZONTAL_AXIS], VERTICAL_NEIGHBORS);
     /* [DEBUG] Scatter and Bcast for matrixB [DEBUG]
         std::cout << "(After Scatter B) CURRENT RANK: " << currentRank << "\n";
         DebugPrint(receiveBufferForMatrixB, NUMBER_OF_LINES_B, NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS]);
      */
 
     /* Multiplication part of matrix A by part of matrix B in current node */
+    MPI_Barrier(MPI_CUSTOM_2D_GRID);
     double* partOfMatrixC = new double[NUMBER_OF_LINES_A * NUMBER_OF_COLUMNS_B / (dims[VERTICAL_AXIS] * dims[HORIZONTAL_AXIS])];
     MatrixMultiplication(receiveBufferForMatrixA, NUMBER_OF_LINES_A / dims[VERTICAL_AXIS], NUMBER_OF_COLUMNS_A,
                          receiveBufferForMatrixB, NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS], partOfMatrixC);
 
-    int numberOfLinesPartMatrixC = NUMBER_OF_LINES_A / dims[VERTICAL_AXIS];
-    int numberOfColumnsPartMatrixC = NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS];
-    if (currentRank == 0) {
+
+    int numberOfLinesPartMatrixC = NUMBER_OF_LINES_A / dims[VERTICAL_AXIS]; // OK!
+    int numberOfColumnsPartMatrixC = NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS]; // OK!
+    if (currentRank == 1) {
         std::cout << "LINES: " << numberOfLinesPartMatrixC << " COLUMNS: " << numberOfColumnsPartMatrixC << "\n";
         DebugPrint(partOfMatrixC, numberOfLinesPartMatrixC, numberOfColumnsPartMatrixC);
     }
 
+    MPI_Barrier(MPI_CUSTOM_2D_GRID);
     MergeAllPartialResultsIntoResultMatrix(matrixC, partOfMatrixC, numberOfLinesPartMatrixC, numberOfColumnsPartMatrixC, numberOfProcesses, dims, MPI_CUSTOM_2D_GRID);
     double end = MPI_Wtime();
 
