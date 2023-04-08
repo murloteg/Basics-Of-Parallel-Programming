@@ -1,11 +1,12 @@
 #include <iostream>
 #include <mpi.h>
+#include <random>
 
 enum SizeConsts {
-    NUMBER_OF_LINES_A = 8,
-    NUMBER_OF_COLUMNS_A = 6, /* must be the same with next parameter! */
-    NUMBER_OF_LINES_B = 6, /* must be the same with previous parameter! */
-    NUMBER_OF_COLUMNS_B = 12,
+    NUMBER_OF_LINES_A = 2048,
+    NUMBER_OF_COLUMNS_A = 2048, /* must be the same with next parameter! */
+    NUMBER_OF_LINES_B = 2048, /* must be the same with previous parameter! */
+    NUMBER_OF_COLUMNS_B = 1024,
     HORIZONTAL_NUMBER_OF_NODES = 0, /* first parameter of grid: p1 */
     VERTICAL_NUMBER_OF_NODES = 0 /* second parameter of grid: p2 */
 };
@@ -28,7 +29,7 @@ double* GenerateMatrixA() {
     int currentPosition = 0;
     for (int i = 0; i < NUMBER_OF_LINES_A; ++i) {
         for (int j = 0; j < NUMBER_OF_COLUMNS_A; ++j) {
-            matrixA[currentPosition] = currentPosition;
+            matrixA[currentPosition] = currentPosition % 17;
             ++currentPosition;
         }
     }
@@ -38,17 +39,30 @@ double* GenerateMatrixA() {
 double* GenerateMatrixB() {
     double* matrixB = new double[NUMBER_OF_LINES_B * NUMBER_OF_COLUMNS_B];
     int currentPosition = 0;
-    int value = 10;
+    double randValue;
     for (int i = 0; i < NUMBER_OF_LINES_B; ++i) {
         for (int j = 0; j < NUMBER_OF_COLUMNS_B; ++j) {
-            matrixB[currentPosition] = 0;
-            if (i == j) {
-                matrixB[currentPosition] = value;
-            }
+            std::random_device randomDevice;
+            std::mt19937 engine(randomDevice());
+            std::uniform_real_distribution<> range(0, 1);
+
+            randValue = range(engine);
+            matrixB[currentPosition] = randValue;
             ++currentPosition;
         }
     }
     return matrixB;
+}
+
+bool CompareMatrices(double* firstMatrix, double* secondMatrix, int numberOfLines, int numberOfColumns) {
+    for (int i = 0; i < numberOfColumns; ++i) {
+        for (int j = 0; j < numberOfLines; ++j) {
+            if (firstMatrix[i * numberOfColumns + j] != secondMatrix[i * numberOfColumns + j]) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 void DebugPrint(double* matrix, int lines, int columns) {
@@ -82,11 +96,11 @@ void SendMatrixBFromRootToHorizontalNeighbors(double* matrixB, double* receiveBu
                 NUMBER_OF_LINES_B * NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS], MPI_DOUBLE, rootRank, COMMUNICATOR);
 }
 
-void InvokeBcastForCommunicator(double* partOfMatrixA, int sizeOfPartOfMatrixA, MPI_Comm COMMUNICATOR) {
+void InvokeBcastForCommunicator(double* partOfMatrix, int sizeOfPartOfMatrix, MPI_Comm COMMUNICATOR) {
     int coords[1] = {0};
     int rootRank = 0;
     MPI_Cart_rank(COMMUNICATOR, coords, &rootRank);
-    MPI_Bcast(partOfMatrixA, sizeOfPartOfMatrixA, MPI_DOUBLE, rootRank, COMMUNICATOR);
+    MPI_Bcast(partOfMatrix, sizeOfPartOfMatrix, MPI_DOUBLE, rootRank, COMMUNICATOR);
 }
 
 void MatrixMultiplication(double* firstMatrix, int firstMatrixLines, int firstMatrixColumns,
@@ -100,11 +114,15 @@ void MatrixMultiplication(double* firstMatrix, int firstMatrixLines, int firstMa
     }
 }
 
+/*
+ * Description of offsets:
+ * [i * NUMBER_OF_COLUMNS_B * numberOfLinesPartMatrixC] ---> vertical shift in result matrix;
+ * [j] ---> horizontal shift in result matrix;
+ */
 void PrepareGathervArguments(int numberOfLinesPartMatrixC, int numberOfColumnsPartMatrixC, int* receiveCounts, int* offsets, int* dims) {
     for (int i = 0; i < dims[VERTICAL_AXIS]; ++i) {
         for (int j = 0; j < dims[HORIZONTAL_AXIS]; ++j) {
-            offsets[i * dims[HORIZONTAL_AXIS] + j] = ((i * NUMBER_OF_COLUMNS_B * numberOfLinesPartMatrixC) +
-                     j * numberOfColumnsPartMatrixC) / (NUMBER_OF_COLUMNS_B / dims[HORIZONTAL_AXIS]);
+            offsets[i * dims[HORIZONTAL_AXIS] + j] = ((i * NUMBER_OF_COLUMNS_B * numberOfLinesPartMatrixC) / numberOfColumnsPartMatrixC) + j;
             receiveCounts[i * dims[HORIZONTAL_AXIS] + j] = 1;
         }
     }
@@ -251,7 +269,10 @@ int main(int argc, char** argv) {
     if (currentRankCoords[HORIZONTAL_AXIS] == 0 && currentRankCoords[VERTICAL_AXIS] == 0) {
         double* checkMatrix = new double[NUMBER_OF_LINES_A * NUMBER_OF_COLUMNS_B];
         MatrixMultiplication(matrixA, NUMBER_OF_LINES_A, NUMBER_OF_COLUMNS_A, matrixB, NUMBER_OF_COLUMNS_B, checkMatrix);
-        DebugPrint(checkMatrix, NUMBER_OF_LINES_A, NUMBER_OF_COLUMNS_B);
+        if (!CompareMatrices(matrixC, checkMatrix, NUMBER_OF_LINES_A, NUMBER_OF_COLUMNS_B)) {
+            std::cout << "INCORRECT!\n";
+        }
+        std::cout << "\n[RECEIVED RESULT]:\n";
         DebugPrint(matrixC, NUMBER_OF_LINES_A, NUMBER_OF_COLUMNS_B);
         delete[] checkMatrix;
     }
