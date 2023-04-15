@@ -3,9 +3,9 @@
 #include <random>
 
 enum SizeConsts {
-    NUMBER_OF_LINES_A = 2048,
-    NUMBER_OF_COLUMNS_A = 2048, /* must be the same with next parameter! */
-    NUMBER_OF_LINES_B = 2048, /* must be the same with previous parameter! */
+    NUMBER_OF_LINES_A = 1792,
+    NUMBER_OF_COLUMNS_A = 1792, /* must be the same with next parameter! */
+    NUMBER_OF_LINES_B = 1792, /* must be the same with previous parameter! */
     NUMBER_OF_COLUMNS_B = 1024,
     HORIZONTAL_NUMBER_OF_NODES = 0, /* first parameter of grid: p1 */
     VERTICAL_NUMBER_OF_NODES = 0 /* second parameter of grid: p2 */
@@ -39,13 +39,12 @@ double* GenerateMatrixA() {
 double* GenerateMatrixB() {
     double* matrixB = new double[NUMBER_OF_LINES_B * NUMBER_OF_COLUMNS_B];
     int currentPosition = 0;
+    std::random_device randomDevice;
+    std::mt19937 engine(randomDevice());
+    std::uniform_real_distribution<> range(0, 1);
     double randValue;
     for (int i = 0; i < NUMBER_OF_LINES_B; ++i) {
         for (int j = 0; j < NUMBER_OF_COLUMNS_B; ++j) {
-            std::random_device randomDevice;
-            std::mt19937 engine(randomDevice());
-            std::uniform_real_distribution<> range(0, 1);
-
             randValue = range(engine);
             matrixB[currentPosition] = randValue;
             ++currentPosition;
@@ -261,7 +260,6 @@ int main(int argc, char** argv) {
     MatrixMultiplication(receiveBufferForMatrixA, numberOfLinesPartMatrixC, NUMBER_OF_COLUMNS_A,
                          receiveBufferForMatrixB, numberOfColumnsPartMatrixC, partOfMatrixC);
 
-    MPI_Barrier(MPI_CUSTOM_2D_GRID);
     MergeAllPartialResultsIntoResultMatrix(matrixC, partOfMatrixC, numberOfLinesPartMatrixC, numberOfColumnsPartMatrixC, numberOfProcesses, dims, MPI_CUSTOM_2D_GRID);
     double end = MPI_Wtime();
 
