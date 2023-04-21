@@ -3,7 +3,7 @@
 #include <cmath>
 #include <mpi.h>
 
-#define CHECK_PARAMETER 10
+#define CHECK_PARAMETER 3
 #define EPSILON 1e-8
 enum GeneralParameters {
     AREA_START_COORDINATE = -1,
@@ -13,9 +13,9 @@ enum GeneralParameters {
 };
 
 enum GridParameters {
-    NUMBER_OF_POINTS_X = 513,
-    NUMBER_OF_POINTS_Y = 319,
-    NUMBER_OF_POINTS_Z = 387
+    NUMBER_OF_POINTS_X = 97,
+    NUMBER_OF_POINTS_Y = 127,
+    NUMBER_OF_POINTS_Z = 38
 };
 
 /* f(x, y, z) = x^2 + y^2 + z^2 */
@@ -251,6 +251,7 @@ bool ThisProcessHasOnlyBoundedPositions(int* countOfPlanes, int currentRank) {
     return (counter == expectedPositions);
 }
 
+// TODO
 bool DoAllProcessesHaveOnlyBoundedPositions(int* countOfPlanes, int numberOfProcesses) {
     int boundedProcessesCounter = 0;
     for (int i = 0; i < numberOfProcesses; ++i) {
@@ -261,12 +262,12 @@ bool DoAllProcessesHaveOnlyBoundedPositions(int* countOfPlanes, int numberOfProc
     return boundedProcessesCounter == numberOfProcesses;
 }
 
-float GetMinDifferenceFromArray(float* arrayWithMaxDifferences, int numberOfProcesses) {
-    float minDifference = FLT_MAX;
+float GetMaxDifferenceFromArray(float* arrayWithMaxDifferences, int numberOfProcesses) {
+    float maxDifference = FLT_MIN;
     for (int i = 0; i < numberOfProcesses; ++i) {
-        minDifference = std::min(minDifference, arrayWithMaxDifferences[i]);
+        maxDifference = std::max(maxDifference, arrayWithMaxDifferences[i]);
     }
-    return minDifference;
+    return maxDifference;
 }
 
 bool CompareResult(float* partOfGridWithPoints, int* countOfPlanes, int currentRank) {
@@ -320,7 +321,7 @@ void IterativeProcessOfJacobiAlgorithm(float* partOfGridWithPoints, int* countOf
 
     int numberOfPlanesXY = countOfPlanes[currentRank];
     float maxDifference = FLT_MAX;
-    while (GetMinDifferenceFromArray(arrayWithMaxDifferences, numberOfProcesses) >= EPSILON) {
+    while (GetMaxDifferenceFromArray(arrayWithMaxDifferences, numberOfProcesses) > EPSILON) {
         for (int i = 0; i < numberOfPlanesXY; ++i) {
             for (int j = 0; j < NUMBER_OF_POINTS_Y; ++j) {
                 for (int k = 0; k < NUMBER_OF_POINTS_X; ++k) {
