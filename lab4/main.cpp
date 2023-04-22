@@ -13,9 +13,9 @@ enum GeneralParameters {
 };
 
 enum GridParameters {
-    NUMBER_OF_POINTS_X = 4,
-    NUMBER_OF_POINTS_Y = 4,
-    NUMBER_OF_POINTS_Z = 4
+    NUMBER_OF_POINTS_X = 400,
+    NUMBER_OF_POINTS_Y = 400,
+    NUMBER_OF_POINTS_Z = 400
 };
 
 /* f(x, y, z) = x^2 + y^2 + z^2 */
@@ -160,7 +160,7 @@ double FindRightMultiplier(double* gridOfPoints, int indexI, int indexJ, int ind
     /* bottom --> for CURRENT process; top --> for CURRENT process! */
     double topValue = 0;
     double bottomValue = 0;
-    
+
     if (IsThisPointBottomNeighbor(indexI + handledBlocks, indexJ, indexK, countOfPlanes, currentRank) &&
             IsThisPointTopNeighbor(indexI + handledBlocks, indexJ, indexK, countOfPlanes, currentRank)) {
         /* send this point to NEXT process */
@@ -207,22 +207,34 @@ double FindRightMultiplier(double* gridOfPoints, int indexI, int indexJ, int ind
     double rightPartValue = CalculateRightPartOfEquationValue(localX, localY, localZ);
 
     /* wait all sent boundary points from another processes */
-    if (IsThisPointBottomNeighbor(indexI, indexJ, indexK, countOfPlanes, currentRank)) {
+    if (IsThisPointBottomNeighbor(indexI + handledBlocks, indexJ, indexK, countOfPlanes, currentRank)) {
         MPI_Wait(&topNeighborRequest, MPI_STATUS_IGNORE);
     }
-    if (IsThisPointTopNeighbor(indexI, indexJ, indexK, countOfPlanes, currentRank)) {
+    if (IsThisPointTopNeighbor(indexI - handledBlocks, indexJ, indexK, countOfPlanes, currentRank)) {
         MPI_Wait(&bottomNeighborRequest, MPI_STATUS_IGNORE);
     }
 
     double firstNeighborZ = bottomValue;
     double secondNeighborZ = topValue;
 
-//    printf("TOTAL LOG: rank: %d \n (x, y, z): (%d %d %d) \n rank's value: %lf \n left X value: %lf \n right X value: %lf \n lower Y value: %lf \n upper Y value: %lf \n prev Z value: %lf \n next Z value: %lf \n\n", currentRank, indexK, indexJ, indexI, currentValue, secondNeighborX, firstNeighborX, secondNeighborY, firstNeighborY, topValue, bottomValue);
+    double sqrDistanceX = distanceBetweenCoordinateX * distanceBetweenCoordinateX;
+    double sqrDistanceY = distanceBetweenCoordinateY * distanceBetweenCoordinateY;
+    double sqrDistanceZ = distanceBetweenCoordinateZ * distanceBetweenCoordinateZ;
 
-    return (firstNeighborZ + secondNeighborZ) / distanceBetweenCoordinateZ * distanceBetweenCoordinateZ
-            + (firstNeighborY * secondNeighborY) / distanceBetweenCoordinateY * distanceBetweenCoordinateY
-            + (firstNeighborX * secondNeighborX) / distanceBetweenCoordinateX * distanceBetweenCoordinateX
-            - rightPartValue;
+    double sumX = firstNeighborX + secondNeighborX;
+    double sumY = firstNeighborY + secondNeighborY;
+    double sumZ = firstNeighborZ + secondNeighborZ;
+
+//    if (indexI == 1 && indexJ == 1 && indexK == 1) {
+//        printf("TOTAL LOG: rank: %d \n (x, y, z): (%d %d %d) \n rank's value: %lf \n left X value: %lf \n right X value: %lf \n lower Y value: %lf \n upper Y value: %lf \n prev Z value: %lf \n next Z value: %lf \n\n", currentRank, indexK, indexJ, indexI, currentValue, secondNeighborX, firstNeighborX, secondNeighborY, firstNeighborY, topValue, bottomValue);
+//        printf("diffX^2: %lf  diffY^2: %lf  diffZ^2: %lf\n", sqrDistanceX, sqrDistanceY, sqrDistanceZ);
+//        printf("x1 + x2 = %lf ; y1 + y2 = %lf ; z1 + z2 = %lf  \n", firstNeighborX + secondNeighborX, firstNeighborY + secondNeighborY, firstNeighborZ + secondNeighborZ);
+//
+//        std::cout << "right part (1): " << (((sumX) / sqrDistanceZ) + ((sumY) / sqrDistanceY) + ((sumZ) / sqrDistanceX)) << "\n";
+//        std::cout << "right part (2): " << -rightPartValue << "\n";
+//    }
+
+    return (sumZ / sqrDistanceZ + sumY / sqrDistanceY + sumX / sqrDistanceX) - rightPartValue;
 }
 
 double GetCheckValue(int indexI, int indexJ, int indexK, double distanceBetweenCoordinateX,
@@ -258,9 +270,9 @@ bool CompareResult(double* partOfGridWithPoints, int* countOfPlanes, int current
                 }
                 double checkValue = GetCheckValue(i + handledBlocks, j, k, distanceBetweenCoordinateX, distanceBetweenCoordinateY, distanceBetweenCoordinateZ);
                 maxDifference = std::max(maxDifference, fabs(partOfGridWithPoints[position] - checkValue));
-                if (currentRank == 0 && (fabs(partOfGridWithPoints[position] - checkValue)) >= maxDifference) {
-                    std::cout << "real pos: " << partOfGridWithPoints[position] << " expected: " << checkValue << "\n";
-                }
+//                if (currentRank == 0 && (fabs(partOfGridWithPoints[position] - checkValue)) >= maxDifference) {
+//                    std::cout << "real pos: " << partOfGridWithPoints[position] << " expected: " << checkValue << "\n";
+//                }
             }
         }
     }
@@ -315,10 +327,14 @@ void IterativeProcessOfJacobiAlgorithm(double* partOfGridWithPoints, int* countO
                                                                      countOfPlanes, handledBlocks, currentRank, numberOfProcesses);
                         partOfGridWithPoints[position] = leftMultiplier * rightMultiplier; // TODO
                         maxDifference = std::max(maxDifference, fabs(partOfGridWithPoints[position] - previousValue));
-                    }
-                    if (currentRank == 0) {
-                        std::cout << "new value: " << partOfGridWithPoints[position] << " old value: " << previousValue << "\n";
-//                        DebugPrintOfGrid(partOfGridWithPoints, NUMBER_OF_POINTS_X, NUMBER_OF_POINTS_Y, numberOfPlanesXY);
+//                        if (currentRank == 0) {
+//                            if (i == 1 && j == 1 && k == 1) {
+//                                DebugPrintOfGrid(partOfGridWithPoints, NUMBER_OF_POINTS_X, NUMBER_OF_POINTS_Y, numberOfPlanesXY);
+//                                std::cout << "left part: " << leftMultiplier << "\n";
+//                                std::cout << "right part: " << rightMultiplier << "\n";
+//                                std::cout << "===================\n";
+//                            }
+//                        }
                     }
                 }
             }
@@ -395,5 +411,23 @@ int main(int argc, char** argv) {
 
     MPI_Finalize();
 
+//    double diffX = CalculateDistanceBetweenPoints(NUMBER_OF_POINTS_X);
+//    double diffY = CalculateDistanceBetweenPoints(NUMBER_OF_POINTS_Y);
+//    double diffZ = CalculateDistanceBetweenPoints(NUMBER_OF_POINTS_Z);
+//
+//    double diff2X = diffX * diffX;
+//    double diff2Y = diffY * diffY;
+//    double diff2Z = diffZ * diffZ;
+//    std::cout << "dX:" << diff2X << " dy: " << diff2Y << " dz:" << diff2Z << "\n";
+//    std::cout << "left part: " << 1 / (2 / diff2X + 2 / diff2Y + 2 / diff2Z + EQUATION_PARAMETER) << "\n";
+//
+//    double localX = GetCurrentCoordinateValue(AREA_START_COORDINATE, 1, diffX);
+//    double localY = GetCurrentCoordinateValue(AREA_START_COORDINATE, 1, diffY);
+//    double localZ = GetCurrentCoordinateValue(AREA_START_COORDINATE, 1, diffZ);
+//    std::cout << "right part: " << (1.222222 / diff2X  + 1.222222 / diff2Y + 1.222222 / diff2Z - CalculateRightPartOfEquationValue(localX, localY, localZ)) << "\n";
+//    std::cout << "expected new value: " << ((1.222222 / diff2X  + 1.222222 / diff2Y + 1.222222 / diff2Z - CalculateRightPartOfEquationValue(localX, localY, localZ)) / (2 / diff2X + 2 / diff2Y + 2 / diff2Z + EQUATION_PARAMETER)) << "\n";
+
     return 0;
 }
+
+// diff: 9.36515e-09
