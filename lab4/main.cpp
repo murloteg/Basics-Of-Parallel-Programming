@@ -3,7 +3,7 @@
 #include <mpi.h>
 #include <cfloat>
 
-#define CHECK_PARAMETER 0.5
+#define CHECK_PARAMETER 0.4
 #define EPSILON 1e-8
 enum GeneralParameters {
     AREA_START_COORDINATE = -1,
@@ -13,9 +13,9 @@ enum GeneralParameters {
 };
 
 enum GridParameters {
-    NUMBER_OF_POINTS_X = 303,
-    NUMBER_OF_POINTS_Y = 451,
-    NUMBER_OF_POINTS_Z = 781
+    NUMBER_OF_POINTS_X = 279,
+    NUMBER_OF_POINTS_Y = 325,
+    NUMBER_OF_POINTS_Z = 317
 };
 
 /* f(x, y, z) = x^2 + y^2 + z^2 */
@@ -56,10 +56,14 @@ bool IsBoundaryPosition(int x, int y, int z, int numberOfPointsX, int numberOfPo
 }
 
 double GetCurrentCoordinateValue(int startPointCoordinate, int index, double distanceBetweenPoints) {
-    return (double) startPointCoordinate + index * distanceBetweenPoints;
+    return startPointCoordinate + index * distanceBetweenPoints;
 }
 
-int GetGridPosition(int indexI, int indexJ, int indexK) {
+int Get2DGridPosition(int indexJ, int indexK) {
+    return indexJ * NUMBER_OF_POINTS_X + indexK;
+}
+
+int Get3DGridPosition(int indexI, int indexJ, int indexK) {
     return indexI * NUMBER_OF_POINTS_X * NUMBER_OF_POINTS_Y + indexJ * NUMBER_OF_POINTS_X + indexK;
 }
 
@@ -68,7 +72,7 @@ void SetInitialApproximationToPartOfGrid(double* partOfGridWithPoints, int numbe
     for (int i = 0; i < numberOfPlanesXY; ++i) {
         for (int j = 0; j < NUMBER_OF_POINTS_Y; ++j) {
             for (int k = 0; k < NUMBER_OF_POINTS_X; ++k) {
-                position = GetGridPosition(i, j, k);
+                position = Get3DGridPosition(i, j, k);
                 partOfGridWithPoints[position] = INITIAL_APPROXIMATION;
             }
         }
@@ -82,7 +86,7 @@ void SetBoundaryConditionals(double* partOfGridWithPoints, int* countOfPlanes, i
     for (int i = 0; i < numberOfPlanesXY; ++i) {
         for (int j = 0; j < NUMBER_OF_POINTS_Y; ++j) {
             for (int k = 0; k < NUMBER_OF_POINTS_X; ++k) {
-                position = GetGridPosition(i, j, k);
+                position = Get3DGridPosition(i, j, k);
                 int handledBlocks = 0;
                 for (int count = 0; count < currentRank; ++count) {
                     handledBlocks += countOfPlanes[count];
@@ -116,28 +120,6 @@ double FindLeftMultiplier(double distanceBetweenCoordinateX, double distanceBetw
                 + 2 / (distanceBetweenCoordinateZ * distanceBetweenCoordinateZ) + EQUATION_PARAMETER);
 }
 
-//bool IsThisPointTopNeighbor(int indexI, int indexJ, int indexK, int* countOfPlanes, int currentRank) {
-//    int position = GetGridPosition(indexI, indexJ, indexK);
-//    int handledBlocks = 0;
-//    for (int count = 0; count < currentRank; ++count) {
-//        handledBlocks += countOfPlanes[count];
-//    }
-//
-//    int firstIndex = handledBlocks * NUMBER_OF_POINTS_X * NUMBER_OF_POINTS_Y;
-//    return (position >= firstIndex) && (position < firstIndex + NUMBER_OF_POINTS_Y * NUMBER_OF_POINTS_X);
-//}
-//
-//bool IsThisPointBottomNeighbor(int indexI, int indexJ, int indexK, int* countOfPlanes, int currentRank) {
-//    int position = GetGridPosition(indexI, indexJ, indexK);
-//    int handledBlocks = 0;
-//    for (int count = 0; count < currentRank; ++count) {
-//        handledBlocks += countOfPlanes[count];
-//    }
-//
-//    int lastIndex = (handledBlocks + countOfPlanes[currentRank]) * NUMBER_OF_POINTS_X * NUMBER_OF_POINTS_Y - 1;
-//    return (position > lastIndex - NUMBER_OF_POINTS_Y * NUMBER_OF_POINTS_X) && (position <= lastIndex);
-//}
-
 bool IsPositionBottomNeighbor(int position, int* countOfPlanes, int currentRank) {
     int handledBlocks = 0;
     for (int count = 0; count < currentRank; ++count) {
@@ -158,24 +140,12 @@ bool IsPositionTopNeighbor(int position, int* countOfPlanes, int currentRank) {
     return (position >= firstIndex) && (position < firstIndex + NUMBER_OF_POINTS_Y * NUMBER_OF_POINTS_X);
 }
 
-bool IsFirstRequestFromPlane(int position, int handledBlocks, int currentRank) {
+bool IsFirstNonBoundaryPosFromPlane(int position, int handledBlocks, int currentRank) {
     if (currentRank == 0) {
-        return position == NUMBER_OF_POINTS_X + 2; /* avoid border position */
+        return position == NUMBER_OF_POINTS_X + 2; /* avoid border positions */
     }
     return position == (handledBlocks * NUMBER_OF_POINTS_X * NUMBER_OF_POINTS_Y + 1);
 }
-
-//void SendBoundaryPoint(double* sendValue, int destinationRank, int numberOfProcesses, MPI_Request* request) {
-//    if (destinationRank >= 0 && destinationRank < numberOfProcesses) {
-//        MPI_Isend(sendValue, 1, MPI_DOUBLE, destinationRank, 1, MPI_COMM_WORLD, request);
-//    }
-//}
-//
-//void ReceiveBoundaryPoint(double* receivedValue, int destinationRank, int numberOfProcesses, MPI_Request* request) {
-//    if (destinationRank >= 0 && destinationRank < numberOfProcesses) {
-//        MPI_Irecv(receivedValue, 1, MPI_DOUBLE, destinationRank, MPI_ANY_TAG, MPI_COMM_WORLD, request);
-//    }
-//}
 
 void SendBoundaryPlane(double* sendPlane, int destinationRank, int numberOfProcesses, MPI_Request* request) {
     if (destinationRank >= 0 && destinationRank < numberOfProcesses) {
@@ -195,11 +165,9 @@ double FindRightMultiplier(double* gridOfPoints, int indexI, int indexJ, int ind
                            double* bottomBorderPlane, double* receivedTopBorderPlane, double* receivedBottomBorderPlane) {
     MPI_Request bottomNeighborRequest;
     MPI_Request topNeighborRequest;
-
-    /* bottom --> for CURRENT process; top --> for CURRENT process! */
-
-    int position = GetGridPosition(indexI + handledBlocks, indexJ, indexK);
-    if (IsFirstRequestFromPlane(position, handledBlocks, currentRank)) {
+    
+    int position = Get3DGridPosition(indexI + handledBlocks, indexJ, indexK);
+    if (IsFirstNonBoundaryPosFromPlane(position, handledBlocks, currentRank)) {
         if (IsPositionTopNeighbor(position, countOfPlanes, currentRank) && IsPositionBottomNeighbor(position, countOfPlanes, currentRank)) {
             SendBoundaryPlane(topBorderPlane, currentRank - 1, numberOfProcesses, &topNeighborRequest);
             SendBoundaryPlane(bottomBorderPlane, currentRank + 1, numberOfProcesses, &bottomNeighborRequest);
@@ -215,11 +183,11 @@ double FindRightMultiplier(double* gridOfPoints, int indexI, int indexJ, int ind
         }
     }
 
-    double firstNeighborY = gridOfPoints[GetGridPosition(indexI, indexJ + 1, indexK)];
-    double secondNeighborY = gridOfPoints[GetGridPosition(indexI, indexJ - 1, indexK)];
+    double firstNeighborY = gridOfPoints[Get3DGridPosition(indexI, indexJ + 1, indexK)];
+    double secondNeighborY = gridOfPoints[Get3DGridPosition(indexI, indexJ - 1, indexK)];
 
-    double firstNeighborX = gridOfPoints[GetGridPosition(indexI, indexJ, indexK + 1)];
-    double secondNeighborX = gridOfPoints[GetGridPosition(indexI, indexJ, indexK - 1)];
+    double firstNeighborX = gridOfPoints[Get3DGridPosition(indexI, indexJ, indexK + 1)];
+    double secondNeighborX = gridOfPoints[Get3DGridPosition(indexI, indexJ, indexK - 1)];
 
     double localX = GetCurrentCoordinateValue(AREA_START_COORDINATE, indexK, distanceBetweenCoordinateX);
     double localY = GetCurrentCoordinateValue(AREA_START_COORDINATE, indexJ, distanceBetweenCoordinateY);
@@ -227,15 +195,15 @@ double FindRightMultiplier(double* gridOfPoints, int indexI, int indexJ, int ind
     double rightPartValue = CalculateRightPartOfEquationValue(localX, localY, localZ);
 
     /* wait all sent boundary planes from another processes */
-    if (IsFirstRequestFromPlane(position, handledBlocks, currentRank) && IsPositionTopNeighbor(position, countOfPlanes, currentRank)) {
+    if (IsFirstNonBoundaryPosFromPlane(position, handledBlocks, currentRank) && IsPositionTopNeighbor(position, countOfPlanes, currentRank)) {
         MPI_Wait(&topNeighborRequest, MPI_STATUS_IGNORE);
     }
-    if (IsFirstRequestFromPlane(position, handledBlocks, currentRank) && IsPositionBottomNeighbor(position, countOfPlanes, currentRank)) {
+    if (IsFirstNonBoundaryPosFromPlane(position, handledBlocks, currentRank) && IsPositionBottomNeighbor(position, countOfPlanes, currentRank)) {
         MPI_Wait(&bottomNeighborRequest, MPI_STATUS_IGNORE);
     }
 
-    double firstNeighborZ = topBorderPlane[indexJ * NUMBER_OF_POINTS_X + indexK];
-    double secondNeighborZ = bottomBorderPlane[indexJ * NUMBER_OF_POINTS_X + indexK];
+    double firstNeighborZ = topBorderPlane[Get2DGridPosition(indexJ, indexK)];
+    double secondNeighborZ = bottomBorderPlane[Get2DGridPosition(indexJ, indexK)];
 
     double sqrDistanceX = distanceBetweenCoordinateX * distanceBetweenCoordinateX;
     double sqrDistanceY = distanceBetweenCoordinateY * distanceBetweenCoordinateY;
@@ -256,14 +224,6 @@ double GetCheckValue(int indexI, int indexJ, int indexK, double distanceBetweenC
     return CalculateFunctionValue(localX, localY, localZ);
 }
 
-double GetMaxDifferenceFromArray(double* arrayWithMaxDifferences, int numberOfProcesses) {
-    double maxDifference = DBL_MIN;
-    for (int i = 0; i < numberOfProcesses; ++i) {
-        maxDifference = std::max(maxDifference, arrayWithMaxDifferences[i]);
-    }
-    return maxDifference;
-}
-
 bool CompareResult(double* partOfGridWithPoints, int* countOfPlanes, int currentRank) {
     double distanceBetweenCoordinateX = CalculateDistanceBetweenPoints(NUMBER_OF_POINTS_X);
     double distanceBetweenCoordinateY = CalculateDistanceBetweenPoints(NUMBER_OF_POINTS_Y);
@@ -274,7 +234,7 @@ bool CompareResult(double* partOfGridWithPoints, int* countOfPlanes, int current
     for (int i = 0; i < numberOfPlanesXY; ++i) {
         for (int j = 0; j < NUMBER_OF_POINTS_Y; ++j) {
             for (int k = 0; k < NUMBER_OF_POINTS_X; ++k) {
-                int position = GetGridPosition(i, j, k);
+                int position = Get3DGridPosition(i, j, k);
                 int handledBlocks = 0;
                 for (int count = 0; count < currentRank; ++count) {
                     handledBlocks += countOfPlanes[count];
@@ -289,26 +249,10 @@ bool CompareResult(double* partOfGridWithPoints, int* countOfPlanes, int current
     return maxDifference < CHECK_PARAMETER;
 }
 
-void DebugPrintOfGrid(double* gridOfPoints, int numberOfPointsX, int numberOfPointsY, int numberOfPointsZ) {
-    int position = 0;
-    for (int i = 0; i < numberOfPointsZ; ++i) {
-        std::cout << "plane " << i << "\n";
-        for (int j = 0; j < numberOfPointsY; ++j) {
-            for (int k = 0; k < numberOfPointsX; ++k) {
-                position = GetGridPosition(i, j, k);
-                std::cout << gridOfPoints[position] << " ";
-            }
-            std::cout << "\n";
-        }
-        std::cout << "\n";
-    }
-    std::cout << "\n";
-}
-
 void CopyBorderPlane(double* borderPlane, double* partOfGridWithPoints, int indexI) {
     for (int indexJ = 0; indexJ < NUMBER_OF_POINTS_Y; ++indexJ) {
         for (int indexK = 0; indexK < NUMBER_OF_POINTS_X; ++indexK) {
-            borderPlane[indexJ * NUMBER_OF_POINTS_X + indexK] = partOfGridWithPoints[GetGridPosition(indexI, indexJ, indexK)];
+            borderPlane[indexJ * NUMBER_OF_POINTS_X + indexK] = partOfGridWithPoints[Get3DGridPosition(indexI, indexJ, indexK)];
         }
     }
 }
@@ -323,26 +267,19 @@ void IterativeProcessOfJacobiAlgorithm(double* partOfGridWithPoints, int* countO
     double distanceBetweenCoordinateX = CalculateDistanceBetweenPoints(NUMBER_OF_POINTS_X);
     double distanceBetweenCoordinateY = CalculateDistanceBetweenPoints(NUMBER_OF_POINTS_Y);
     double distanceBetweenCoordinateZ = CalculateDistanceBetweenPoints(NUMBER_OF_POINTS_Z);
-
-//    double* arrayWithMaxDifferences = new double[numberOfProcesses];
-//    for (int i = 0; i < numberOfProcesses; ++i) {
-//        arrayWithMaxDifferences[i] = DBL_MIN;
-//    }
-
+    
     double* topBorderPlane = new double[NUMBER_OF_POINTS_X * NUMBER_OF_POINTS_Y];
     double* bottomBorderPlane = new double[NUMBER_OF_POINTS_X * NUMBER_OF_POINTS_Y];
-
     double* receivedTopBorderPlane = new double[NUMBER_OF_POINTS_X * NUMBER_OF_POINTS_Y];
     double* receivedBottomBorderPlane = new double[NUMBER_OF_POINTS_X * NUMBER_OF_POINTS_Y];
 
     int numberOfPlanesXY = countOfPlanes[currentRank];
-//    MPI_Request allProcessRequest;
     while (true) {
         double maxDifference = DBL_MIN;
         for (int i = 0; i < numberOfPlanesXY; ++i) {
             for (int j = 0; j < NUMBER_OF_POINTS_Y; ++j) {
                 for (int k = 0; k < NUMBER_OF_POINTS_X; ++k) {
-                    int position = GetGridPosition(i, j, k);
+                    int position = Get3DGridPosition(i, j, k);
                     int handledBlocks = 0;
                     for (int count = 0; count < currentRank; ++count) {
                         handledBlocks += countOfPlanes[count];
@@ -363,22 +300,11 @@ void IterativeProcessOfJacobiAlgorithm(double* partOfGridWithPoints, int* countO
             UpdateBorderPlane(partOfGridWithPoints, topBorderPlane, numberOfPlanesXY, (i - 1));
             UpdateBorderPlane(partOfGridWithPoints, bottomBorderPlane, numberOfPlanesXY, (i + 1));
         }
-//        MPI_Iallgather(&maxDifference, 1, MPI_DOUBLE, arrayWithMaxDifferences, 1, MPI_DOUBLE, MPI_COMM_WORLD, &allProcessRequest);
-//        MPI_Wait(&allProcessRequest, MPI_STATUSES_IGNORE);
-//        if (currentRank == 0) {
-//            DebugPrintOfGrid(partOfGridWithPoints, NUMBER_OF_POINTS_X, NUMBER_OF_POINTS_Y, NUMBER_OF_POINTS_Z);
-//        }
-
-//        MPI_Allgather(&maxDifference, 1, MPI_DOUBLE, arrayWithMaxDifferences, 1, MPI_DOUBLE, MPI_COMM_WORLD);
-//        std::cout << "rank: " << currentRank << " max diff: " << GetMaxDifferenceFromArray(arrayWithMaxDifferences, numberOfProcesses) << "\n";
-//        if (GetMaxDifferenceFromArray(arrayWithMaxDifferences, numberOfProcesses) < EPSILON) {
-//            break;
-//        }
-
+        
         double maxDiffFromAllProcesses = DBL_MIN;
         MPI_Allreduce(&maxDifference, &maxDiffFromAllProcesses, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
         if (currentRank == 0) {
-            std::cout << "max diff: " << maxDiffFromAllProcesses << "\n";
+            std::cout << "[Debug] Max difference: " << maxDiffFromAllProcesses << "\n";
         }
         if (maxDiffFromAllProcesses < EPSILON) {
             break;
@@ -389,8 +315,7 @@ void IterativeProcessOfJacobiAlgorithm(double* partOfGridWithPoints, int* countO
     } else {
         std::cout << "INCORRECT!\n";
     }
-
-//    delete[] arrayWithMaxDifferences;
+    
     delete[] topBorderPlane;
     delete[] bottomBorderPlane;
     delete[] receivedTopBorderPlane;
