@@ -181,6 +181,9 @@ double FindRightMultiplier(double* gridOfPoints, int indexI, int indexJ, int ind
             SendBoundaryPlane(topBorderPlane, currentRank - 1, numberOfProcesses, &topNeighborRequest);
             ReceiveBoundaryPlane(receivedBottomBorderPlane, currentRank - 1, numberOfProcesses, &bottomNeighborRequest);
         }
+    } else if (!IsPositionTopNeighbor(position, countOfPlanes, currentRank) && !IsPositionBottomNeighbor(position, countOfPlanes, currentRank)) {
+        receivedBottomBorderPlane = &gridOfPoints[Get3DGridPosition(indexI, indexJ, indexK)];
+        receivedTopBorderPlane = &gridOfPoints[Get3DGridPosition(indexI, indexJ, indexK)];
     }
 
     double firstNeighborY = gridOfPoints[Get3DGridPosition(indexI, indexJ + 1, indexK)];
@@ -202,8 +205,8 @@ double FindRightMultiplier(double* gridOfPoints, int indexI, int indexJ, int ind
         MPI_Wait(&bottomNeighborRequest, MPI_STATUS_IGNORE);
     }
 
-    double firstNeighborZ = topBorderPlane[Get2DGridPosition(indexJ, indexK)];
-    double secondNeighborZ = bottomBorderPlane[Get2DGridPosition(indexJ, indexK)];
+    double firstNeighborZ = receivedTopBorderPlane[Get2DGridPosition(indexJ, indexK)];
+    double secondNeighborZ = receivedBottomBorderPlane[Get2DGridPosition(indexJ, indexK)];
 
     double sqrDistanceX = distanceBetweenCoordinateX * distanceBetweenCoordinateX;
     double sqrDistanceY = distanceBetweenCoordinateY * distanceBetweenCoordinateY;
@@ -249,16 +252,30 @@ bool CompareResult(double* partOfGridWithPoints, int* countOfPlanes, int current
     return maxDifference < CHECK_PARAMETER;
 }
 
+double GetMaxDifferenceFromArray(double* arrayWithMaxDifferences, int numberOfProcesses) {
+    double maxDifference = DBL_MIN;
+    for (int i = 0; i < numberOfProcesses; ++i) {
+        maxDifference = std::max(maxDifference, arrayWithMaxDifferences[i]);
+    }
+    return maxDifference;
+}
+
 void CopyBorderPlane(double* borderPlane, double* partOfGridWithPoints, int indexI) {
     for (int indexJ = 0; indexJ < NUMBER_OF_POINTS_Y; ++indexJ) {
         for (int indexK = 0; indexK < NUMBER_OF_POINTS_X; ++indexK) {
-            borderPlane[indexJ * NUMBER_OF_POINTS_X + indexK] = partOfGridWithPoints[Get3DGridPosition(indexI, indexJ, indexK)];
+            borderPlane[Get2DGridPosition(indexJ, indexK)] = partOfGridWithPoints[Get3DGridPosition(indexI, indexJ, indexK)];
         }
     }
 }
 
-void UpdateBorderPlane(double* partOfGridWithPoints, double* borderPlane, int numberOfPlanesXY, int indexI) {
-    if (indexI == 0 || indexI == numberOfPlanesXY - 1) {
+void UpdateTopBorderPlane(double* partOfGridWithPoints, double* borderPlane, int indexI) {
+    if (indexI == 0) {
+        CopyBorderPlane(borderPlane, partOfGridWithPoints, indexI);
+    }
+}
+
+void UpdateBottomBorderPlane(double* partOfGridWithPoints, double* borderPlane, int numberOfPlanesXY, int indexI) {
+    if (indexI == numberOfPlanesXY - 1) {
         CopyBorderPlane(borderPlane, partOfGridWithPoints, indexI);
     }
 }
@@ -267,16 +284,25 @@ void IterativeProcessOfJacobiAlgorithm(double* partOfGridWithPoints, int* countO
     double distanceBetweenCoordinateX = CalculateDistanceBetweenPoints(NUMBER_OF_POINTS_X);
     double distanceBetweenCoordinateY = CalculateDistanceBetweenPoints(NUMBER_OF_POINTS_Y);
     double distanceBetweenCoordinateZ = CalculateDistanceBetweenPoints(NUMBER_OF_POINTS_Z);
-    
+
+    double* arrayWithMaxDifferences = new double[numberOfProcesses];
+    for (int i = 0; i < numberOfProcesses; ++i) {
+        arrayWithMaxDifferences[i] = DBL_MIN;
+    }
+    MPI_Request allProcessRequest;
+
     double* topBorderPlane = new double[NUMBER_OF_POINTS_X * NUMBER_OF_POINTS_Y];
     double* bottomBorderPlane = new double[NUMBER_OF_POINTS_X * NUMBER_OF_POINTS_Y];
     double* receivedTopBorderPlane = new double[NUMBER_OF_POINTS_X * NUMBER_OF_POINTS_Y];
     double* receivedBottomBorderPlane = new double[NUMBER_OF_POINTS_X * NUMBER_OF_POINTS_Y];
 
     int numberOfPlanesXY = countOfPlanes[currentRank];
+    int iterationCounter = 0;
     while (true) {
         double maxDifference = DBL_MIN;
         for (int i = 0; i < numberOfPlanesXY; ++i) {
+            UpdateTopBorderPlane(partOfGridWithPoints, topBorderPlane, i);
+            UpdateBottomBorderPlane(partOfGridWithPoints, bottomBorderPlane, numberOfPlanesXY, i);
             for (int j = 0; j < NUMBER_OF_POINTS_Y; ++j) {
                 for (int k = 0; k < NUMBER_OF_POINTS_X; ++k) {
                     int position = Get3DGridPosition(i, j, k);
@@ -297,16 +323,15 @@ void IterativeProcessOfJacobiAlgorithm(double* partOfGridWithPoints, int* countO
                     }
                 }
             }
-            UpdateBorderPlane(partOfGridWithPoints, topBorderPlane, numberOfPlanesXY, (i - 1));
-            UpdateBorderPlane(partOfGridWithPoints, bottomBorderPlane, numberOfPlanesXY, (i + 1));
         }
-        
-        double maxDiffFromAllProcesses = DBL_MIN;
-        MPI_Allreduce(&maxDifference, &maxDiffFromAllProcesses, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+
+        MPI_Iallgather(&maxDifference, 1, MPI_DOUBLE, arrayWithMaxDifferences, 1, MPI_DOUBLE, MPI_COMM_WORLD, &allProcessRequest);
+        MPI_Wait(&allProcessRequest, MPI_STATUSES_IGNORE);
         if (currentRank == 0) {
-            std::cout << "[Debug] Max difference: " << maxDiffFromAllProcesses << "\n";
+            ++iterationCounter;
+            std::cout << iterationCounter << " [Debug] Max difference: " << GetMaxDifferenceFromArray(arrayWithMaxDifferences, numberOfProcesses) << "\n";
         }
-        if (maxDiffFromAllProcesses < EPSILON) {
+        if (GetMaxDifferenceFromArray(arrayWithMaxDifferences, numberOfProcesses) < EPSILON) {
             break;
         }
     }
@@ -315,7 +340,8 @@ void IterativeProcessOfJacobiAlgorithm(double* partOfGridWithPoints, int* countO
     } else {
         std::cout << "INCORRECT!\n";
     }
-    
+
+    delete[] arrayWithMaxDifferences;
     delete[] topBorderPlane;
     delete[] bottomBorderPlane;
     delete[] receivedTopBorderPlane;
