@@ -12,9 +12,9 @@ enum GeneralParameters {
 };
 
 enum GridParameters {
-    NUMBER_OF_POINTS_X = 219,
-    NUMBER_OF_POINTS_Y = 225,
-    NUMBER_OF_POINTS_Z = 117
+    NUMBER_OF_POINTS_X = 319,
+    NUMBER_OF_POINTS_Y = 325,
+    NUMBER_OF_POINTS_Z = 375
 };
 
 /* f(x, y, z) = x^2 + y^2 + z^2 */
@@ -121,7 +121,8 @@ double FindLeftMultiplier(double distanceCoordX, double distanceCoordY, double d
     return 1 / (partX + partY + partZ + EQUATION_PARAMETER);
 }
 
-void InvokeCommunications(double* partOfGrid, double* topBorderPlane, double* bottomBorderPlane,
+/* bottom boundary plane for PREVIOUS process; top boundary plane for NEXT process */
+void MakeRequestsToNeighbors(double* partOfGrid, double* topBorderPlane, double* bottomBorderPlane,
                           int numberOfPlanesXY, int currentRank, int numberOfProcesses,
                           MPI_Request* topNeighborRequest, MPI_Request* bottomNeighborRequest) {
     if (currentRank != 0) {
@@ -137,6 +138,16 @@ void InvokeCommunications(double* partOfGrid, double* topBorderPlane, double* bo
 
         MPI_Irecv(topBorderPlane, NUMBER_OF_POINTS_X * NUMBER_OF_POINTS_Y, MPI_DOUBLE, currentRank + 1, MPI_ANY_TAG,
                   MPI_COMM_WORLD, topNeighborRequest);
+    }
+}
+
+void WaitDataFromNeighbors(int currentRank, int numberOfProcesses, MPI_Request* topNeighborRequest,
+                           MPI_Request* bottomNeighborRequest) {
+    if (currentRank != 0) {
+        MPI_Wait(bottomNeighborRequest, MPI_STATUSES_IGNORE);
+    }
+    if (currentRank != numberOfProcesses - 1) {
+        MPI_Wait(topNeighborRequest, MPI_STATUSES_IGNORE);
     }
 }
 
@@ -170,13 +181,12 @@ void CompareResult(double* partOfGrid, int* countOfPlanes, int currentRank) {
             }
         }
     }
-
     std::cout << "MAX DIFFERENCE: " << maxDifference << " FROM PROCESS: \"" << currentRank << "\"\n";
 }
 
 void CalculateInnerPart(double* partOfGrid, int numberOfPlanesXY, int handledBlocks,
                         double distanceCoordX, double distanceCoordY, double distanceCoordZ,
-                        double leftMultiplier, double* maxDifference) {
+                        double leftMultiplier, double& maxDifference) {
     double sqrDistanceX = distanceCoordX * distanceCoordX;
     double sqrDistanceY = distanceCoordY * distanceCoordY;
     double sqrDistanceZ = distanceCoordZ * distanceCoordZ;
@@ -206,7 +216,7 @@ void CalculateInnerPart(double* partOfGrid, int numberOfPlanesXY, int handledBlo
                 partOfGrid[Get3DGridPosition(i, j, k)] = leftMultiplier *
                         ((sumZ / sqrDistanceZ + sumY / sqrDistanceY + sumX / sqrDistanceX) - rightPartValue);
                 double currentValue = partOfGrid[Get3DGridPosition(i, j, k)];
-                *maxDifference = std::max(*maxDifference, fabs(currentValue - previousValue));
+                maxDifference = std::max(maxDifference, fabs(currentValue - previousValue));
             }
         }
     }
@@ -215,22 +225,25 @@ void CalculateInnerPart(double* partOfGrid, int numberOfPlanesXY, int handledBlo
 void CalculateBoundaryPart(double* partOfGrid, int numberOfPlanesXY, int handledBlocks,
                             double distanceCoordX, double distanceCoordY, double distanceCoordZ,
                             double leftMultiplier, double* topBorderPlane, double* bottomBorderPlane,
-                            double* maxDifference) {
+                            double& maxDifference, int currentRank, int numberOfProcesses) {
     double sqrDistanceX = distanceCoordX * distanceCoordX;
     double sqrDistanceY = distanceCoordY * distanceCoordY;
     double sqrDistanceZ = distanceCoordZ * distanceCoordZ;
 
-    for (int j = 0; j < NUMBER_OF_POINTS_Y; ++j) {
-        for (int k = 0; k < NUMBER_OF_POINTS_X; ++k) {
-            if (!IsBoundaryPosition(k, j, handledBlocks, NUMBER_OF_POINTS_X, NUMBER_OF_POINTS_Y, NUMBER_OF_POINTS_Z)) {
-                double firstNeighborY = partOfGrid[Get3DGridPosition(0, j + 1, k)];
-                double secondNeighborY = partOfGrid[Get3DGridPosition(0, j - 1, k)];
+    int firstIndexZ = 0;
+    int lastIndexZ = numberOfPlanesXY - 1;
 
-                double firstNeighborX = partOfGrid[Get3DGridPosition(0, j, k + 1)];
-                double secondNeighborX = partOfGrid[Get3DGridPosition(0, j, k - 1)];
+    for (int j = 1; j < NUMBER_OF_POINTS_Y - 1; ++j) {
+        for (int k = 1; k < NUMBER_OF_POINTS_X - 1; ++k) {
+            if (currentRank != 0) {
+                double firstNeighborY = partOfGrid[Get3DGridPosition(firstIndexZ, j + 1, k)];
+                double secondNeighborY = partOfGrid[Get3DGridPosition(firstIndexZ, j - 1, k)];
 
-                double firstNeighborZ = topBorderPlane[Get2DGridPosition(j, k)];
-                double secondNeighborZ = bottomBorderPlane[Get2DGridPosition(j, k)];
+                double firstNeighborX = partOfGrid[Get3DGridPosition(firstIndexZ, j, k + 1)];
+                double secondNeighborX = partOfGrid[Get3DGridPosition(firstIndexZ, j, k - 1)];
+
+                double firstNeighborZ = bottomBorderPlane[Get2DGridPosition(j, k)];
+                double secondNeighborZ = partOfGrid[Get3DGridPosition(firstIndexZ + 1, j, k)];
 
                 double sumX = firstNeighborX + secondNeighborX;
                 double sumY = firstNeighborY + secondNeighborY;
@@ -241,26 +254,22 @@ void CalculateBoundaryPart(double* partOfGrid, int numberOfPlanesXY, int handled
                 double localZ = GetCurrentCoordinateValue(AREA_START_COORDINATE, handledBlocks, distanceCoordZ);
                 double rightPartValue = CalculateRightPartOfEquationValue(localX, localY, localZ);
 
-                double previousValue = partOfGrid[Get3DGridPosition(0, j, k)];
-                partOfGrid[Get3DGridPosition(0, j, k)] = leftMultiplier *
-                        ((sumZ / sqrDistanceZ + sumY / sqrDistanceY + sumX / sqrDistanceX) - rightPartValue);
-                double currentValue = partOfGrid[Get3DGridPosition(0, j, k)];
-                *maxDifference = std::max(*maxDifference, fabs(currentValue - previousValue));
+                double previousValue = partOfGrid[Get3DGridPosition(firstIndexZ, j, k)];
+                partOfGrid[Get3DGridPosition(firstIndexZ, j, k)] = leftMultiplier *
+                                                         ((sumZ / sqrDistanceZ + sumY / sqrDistanceY + sumX / sqrDistanceX) - rightPartValue);
+                double currentValue = partOfGrid[Get3DGridPosition(firstIndexZ, j, k)];
+                maxDifference = std::max(maxDifference, fabs(currentValue - previousValue));
             }
-        }
-    }
 
-    for (int j = 0; j < NUMBER_OF_POINTS_Y; ++j) {
-        for (int k = 0; k < NUMBER_OF_POINTS_X; ++k) {
-            if (!IsBoundaryPosition(k, j, numberOfPlanesXY - 1 + handledBlocks, NUMBER_OF_POINTS_X, NUMBER_OF_POINTS_Y, NUMBER_OF_POINTS_Z)) {
-                double firstNeighborY = partOfGrid[Get3DGridPosition(numberOfPlanesXY - 1, j + 1, k)];
-                double secondNeighborY = partOfGrid[Get3DGridPosition(numberOfPlanesXY - 1, j - 1, k)];
+            if (currentRank != numberOfProcesses - 1) {
+                double firstNeighborY = partOfGrid[Get3DGridPosition(lastIndexZ, j + 1, k)];
+                double secondNeighborY = partOfGrid[Get3DGridPosition(lastIndexZ, j - 1, k)];
 
-                double firstNeighborX = partOfGrid[Get3DGridPosition(numberOfPlanesXY - 1, j, k + 1)];
-                double secondNeighborX = partOfGrid[Get3DGridPosition(numberOfPlanesXY - 1, j, k - 1)];
+                double firstNeighborX = partOfGrid[Get3DGridPosition(lastIndexZ, j, k + 1)];
+                double secondNeighborX = partOfGrid[Get3DGridPosition(lastIndexZ, j, k - 1)];
 
-                double firstNeighborZ = topBorderPlane[Get2DGridPosition(j, k)];
-                double secondNeighborZ = bottomBorderPlane[Get2DGridPosition(j, k)];
+                double firstNeighborZ = partOfGrid[Get3DGridPosition(lastIndexZ - 1, j, k)];
+                double secondNeighborZ = topBorderPlane[Get2DGridPosition(j, k)];
 
                 double sumX = firstNeighborX + secondNeighborX;
                 double sumY = firstNeighborY + secondNeighborY;
@@ -268,14 +277,14 @@ void CalculateBoundaryPart(double* partOfGrid, int numberOfPlanesXY, int handled
 
                 double localX = GetCurrentCoordinateValue(AREA_START_COORDINATE, k, distanceCoordX);
                 double localY = GetCurrentCoordinateValue(AREA_START_COORDINATE, j, distanceCoordY);
-                double localZ = GetCurrentCoordinateValue(AREA_START_COORDINATE, numberOfPlanesXY - 1 + handledBlocks, distanceCoordZ);
+                double localZ = GetCurrentCoordinateValue(AREA_START_COORDINATE, handledBlocks, distanceCoordZ);
                 double rightPartValue = CalculateRightPartOfEquationValue(localX, localY, localZ);
 
-                double previousValue = partOfGrid[Get3DGridPosition(numberOfPlanesXY - 1, j, k)];
-                partOfGrid[Get3DGridPosition(numberOfPlanesXY - 1, j, k)] = leftMultiplier *
-                        ((sumZ / sqrDistanceZ + sumY / sqrDistanceY + sumX / sqrDistanceX) - rightPartValue);
-                double currentValue = partOfGrid[Get3DGridPosition(numberOfPlanesXY - 1, j, k)];
-                *maxDifference = std::max(*maxDifference, fabs(currentValue - previousValue));
+                double previousValue = partOfGrid[Get3DGridPosition(lastIndexZ, j, k)];
+                partOfGrid[Get3DGridPosition(lastIndexZ, j, k)] = leftMultiplier *
+                                                                   ((sumZ / sqrDistanceZ + sumY / sqrDistanceY + sumX / sqrDistanceX) - rightPartValue);
+                double currentValue = partOfGrid[Get3DGridPosition(lastIndexZ, j, k)];
+                maxDifference = std::max(maxDifference, fabs(currentValue - previousValue));
             }
         }
     }
@@ -301,17 +310,16 @@ void IterativeProcessOfJacobiAlgorithm(double* partOfGrid, int* countOfPlanes, i
     int iterationCounter = 0;
     while (true) {
         double maxDifference = DBL_MIN;
-        InvokeCommunications(partOfGrid, topBorderPlane, bottomBorderPlane, numberOfPlanesXY, currentRank,
+        MakeRequestsToNeighbors(partOfGrid, topBorderPlane, bottomBorderPlane, numberOfPlanesXY, currentRank,
                              numberOfProcesses, &topNeighborRequest, &bottomNeighborRequest);
 
         CalculateInnerPart(partOfGrid, numberOfPlanesXY, handledBlocks, distanceCoordX, distanceCoordY, distanceCoordZ,
-                           leftMultiplier, &maxDifference);
+                           leftMultiplier, maxDifference);
 
-        MPI_Wait(&topNeighborRequest, MPI_STATUSES_IGNORE);
-        MPI_Wait(&bottomNeighborRequest, MPI_STATUSES_IGNORE);
+        WaitDataFromNeighbors(currentRank, numberOfProcesses, &topNeighborRequest, &bottomNeighborRequest);
 
         CalculateBoundaryPart(partOfGrid, numberOfPlanesXY, handledBlocks, distanceCoordX, distanceCoordY, distanceCoordZ,
-                              leftMultiplier, topBorderPlane, bottomBorderPlane, &maxDifference);
+                              leftMultiplier, topBorderPlane, bottomBorderPlane, maxDifference, currentRank, numberOfProcesses);
 
         double maxDiffFromAllProcesses = DBL_MIN;
         MPI_Allreduce(&maxDifference, &maxDiffFromAllProcesses, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
