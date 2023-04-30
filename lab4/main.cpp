@@ -12,9 +12,9 @@ enum GeneralParameters {
 };
 
 enum GridParameters {
-    NUMBER_OF_POINTS_X = 319,
-    NUMBER_OF_POINTS_Y = 325,
-    NUMBER_OF_POINTS_Z = 375
+    NUMBER_OF_POINTS_X = 273,
+    NUMBER_OF_POINTS_Y = 237,
+    NUMBER_OF_POINTS_Z = 475
 };
 
 /* f(x, y, z) = x^2 + y^2 + z^2 */
@@ -124,30 +124,30 @@ double FindLeftMultiplier(double distanceCoordX, double distanceCoordY, double d
 /* bottom boundary plane for PREVIOUS process; top boundary plane for NEXT process */
 void MakeRequestsToNeighbors(double* partOfGrid, double* topBorderPlane, double* bottomBorderPlane,
                           int numberOfPlanesXY, int currentRank, int numberOfProcesses,
-                          MPI_Request* topNeighborRequest, MPI_Request* bottomNeighborRequest) {
+                          MPI_Request* topSendRequest, MPI_Request* bottomRecvRequest,
+                          MPI_Request* bottomSendRequest, MPI_Request* topRecvRequest) {
     if (currentRank != 0) {
-        MPI_Isend(partOfGrid, NUMBER_OF_POINTS_X * NUMBER_OF_POINTS_Y, MPI_DOUBLE, currentRank - 1,
-                  currentRank, MPI_COMM_WORLD, topNeighborRequest);
+        MPI_Isend(&partOfGrid[0], NUMBER_OF_POINTS_X * NUMBER_OF_POINTS_Y, MPI_DOUBLE, currentRank - 1,
+                  currentRank, MPI_COMM_WORLD, topSendRequest);
 
         MPI_Irecv(bottomBorderPlane, NUMBER_OF_POINTS_X * NUMBER_OF_POINTS_Y, MPI_DOUBLE, currentRank - 1, MPI_ANY_TAG,
-                  MPI_COMM_WORLD, bottomNeighborRequest);
+                  MPI_COMM_WORLD, bottomRecvRequest);
     }
     if (currentRank != numberOfProcesses - 1) {
-        MPI_Isend(partOfGrid + (numberOfPlanesXY - 1) * NUMBER_OF_POINTS_X * NUMBER_OF_POINTS_Y, NUMBER_OF_POINTS_X * NUMBER_OF_POINTS_Y,
-                  MPI_DOUBLE, currentRank + 1, currentRank, MPI_COMM_WORLD, bottomNeighborRequest);
+        MPI_Isend(&partOfGrid[0] + (numberOfPlanesXY - 1) * NUMBER_OF_POINTS_X * NUMBER_OF_POINTS_Y, NUMBER_OF_POINTS_X * NUMBER_OF_POINTS_Y,
+                  MPI_DOUBLE, currentRank + 1, currentRank, MPI_COMM_WORLD, bottomSendRequest);
 
         MPI_Irecv(topBorderPlane, NUMBER_OF_POINTS_X * NUMBER_OF_POINTS_Y, MPI_DOUBLE, currentRank + 1, MPI_ANY_TAG,
-                  MPI_COMM_WORLD, topNeighborRequest);
+                  MPI_COMM_WORLD, topRecvRequest);
     }
 }
 
-void WaitDataFromNeighbors(int currentRank, int numberOfProcesses, MPI_Request* topNeighborRequest,
-                           MPI_Request* bottomNeighborRequest) {
+void WaitDataFromNeighbors(int currentRank, int numberOfProcesses, MPI_Request* bottomRecvRequest, MPI_Request* topRecvRequest) {
     if (currentRank != 0) {
-        MPI_Wait(bottomNeighborRequest, MPI_STATUSES_IGNORE);
+        MPI_Wait(bottomRecvRequest, MPI_STATUSES_IGNORE);
     }
     if (currentRank != numberOfProcesses - 1) {
-        MPI_Wait(topNeighborRequest, MPI_STATUSES_IGNORE);
+        MPI_Wait(topRecvRequest, MPI_STATUSES_IGNORE);
     }
 }
 
@@ -303,23 +303,26 @@ void IterativeProcessOfJacobiAlgorithm(double* partOfGrid, int* countOfPlanes, i
 
     double* topBorderPlane = new double[NUMBER_OF_POINTS_X * NUMBER_OF_POINTS_Y];
     double* bottomBorderPlane = new double[NUMBER_OF_POINTS_X * NUMBER_OF_POINTS_Y];
-    MPI_Request topNeighborRequest;
-    MPI_Request bottomNeighborRequest;
+    MPI_Request topSendRequest;
+    MPI_Request topRecvRequest;
+    MPI_Request bottomSendRequest;
+    MPI_Request bottomRecvRequest;
 
     int numberOfPlanesXY = countOfPlanes[currentRank];
     int iterationCounter = 0;
     while (true) {
         double maxDifference = DBL_MIN;
         MakeRequestsToNeighbors(partOfGrid, topBorderPlane, bottomBorderPlane, numberOfPlanesXY, currentRank,
-                             numberOfProcesses, &topNeighborRequest, &bottomNeighborRequest);
+                             numberOfProcesses, &topSendRequest, &bottomRecvRequest, &bottomSendRequest, &topRecvRequest);
 
         CalculateInnerPart(partOfGrid, numberOfPlanesXY, handledBlocks, distanceCoordX, distanceCoordY, distanceCoordZ,
                            leftMultiplier, maxDifference);
 
-        WaitDataFromNeighbors(currentRank, numberOfProcesses, &topNeighborRequest, &bottomNeighborRequest);
+        WaitDataFromNeighbors(currentRank, numberOfProcesses, &bottomRecvRequest, &topRecvRequest);
 
         CalculateBoundaryPart(partOfGrid, numberOfPlanesXY, handledBlocks, distanceCoordX, distanceCoordY, distanceCoordZ,
-                              leftMultiplier, topBorderPlane, bottomBorderPlane, maxDifference, currentRank, numberOfProcesses);
+                              leftMultiplier, topBorderPlane, bottomBorderPlane, maxDifference, currentRank,
+                              numberOfProcesses);
 
         double maxDiffFromAllProcesses = DBL_MIN;
         MPI_Allreduce(&maxDifference, &maxDiffFromAllProcesses, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
