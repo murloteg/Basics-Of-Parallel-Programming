@@ -18,9 +18,9 @@ NUMBER_OF_POINTS_Z = 384
 */
 
 enum GridParameters {
-    NUMBER_OF_POINTS_X = 339,
-    NUMBER_OF_POINTS_Y = 237,
-    NUMBER_OF_POINTS_Z = 384
+    NUMBER_OF_POINTS_X = 10,
+    NUMBER_OF_POINTS_Y = 10,
+    NUMBER_OF_POINTS_Z = 10
 };
 
 /* f(x, y, z) = x^2 + y^2 + z^2 */
@@ -300,7 +300,8 @@ void CalculateBoundaryPart(double* partOfGrid, int numberOfPlanesXY, int handled
     }
 }
 
-double IterativeProcessOfJacobiAlgorithm(double* partOfGrid, int* countOfPlanes, int currentRank, int numberOfProcesses) {
+void IterativeProcessOfJacobiAlgorithm(double* partOfGrid, int* countOfPlanes, int currentRank, int numberOfProcesses) {
+    double start = MPI_Wtime();
     double distanceCoordX = CalculateDistanceBetweenPoints(NUMBER_OF_POINTS_X);
     double distanceCoordY = CalculateDistanceBetweenPoints(NUMBER_OF_POINTS_Y);
     double distanceCoordZ = CalculateDistanceBetweenPoints(NUMBER_OF_POINTS_Z);
@@ -344,12 +345,15 @@ double IterativeProcessOfJacobiAlgorithm(double* partOfGrid, int* countOfPlanes,
             break;
         }
     }
+
     double end = MPI_Wtime();
+    if (currentRank == 0) {
+        std::cout << "Elapsed time: " << end - start << " [sec]\n";
+    }
     CompareResult(partOfGrid, countOfPlanes, currentRank);
 
     delete[] topBorderPlane;
     delete[] bottomBorderPlane;
-    return end;
 }
 
 int CalculateProcessNumberOfPlanes(int currentRank, int numberOfProcesses) {
@@ -389,12 +393,7 @@ int main(int argc, char** argv) {
     }
 
     double* partOfGrid = CreatePartOfGridWithPoints(countOfPlanes, currentRank);
-    double start = MPI_Wtime();
-    double end = IterativeProcessOfJacobiAlgorithm(partOfGrid, countOfPlanes, currentRank, numberOfProcesses);
-
-    if (currentRank == 0) {
-        std::cout << "Elapsed time: " << end - start << " [sec]\n";
-    }
+    IterativeProcessOfJacobiAlgorithm(partOfGrid, countOfPlanes, currentRank, numberOfProcesses);
 
     CleanUp(partOfGrid, countOfPlanes);
 
