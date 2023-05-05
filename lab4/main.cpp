@@ -11,10 +11,16 @@ enum GeneralParameters {
     INITIAL_APPROXIMATION = 0,
 };
 
+/*
+NUMBER_OF_POINTS_X = 339,
+NUMBER_OF_POINTS_Y = 237,
+NUMBER_OF_POINTS_Z = 384
+*/
+
 enum GridParameters {
-    NUMBER_OF_POINTS_X = 273,
+    NUMBER_OF_POINTS_X = 339,
     NUMBER_OF_POINTS_Y = 237,
-    NUMBER_OF_POINTS_Z = 475
+    NUMBER_OF_POINTS_Z = 384
 };
 
 /* f(x, y, z) = x^2 + y^2 + z^2 */
@@ -142,11 +148,14 @@ void MakeRequestsToNeighbors(double* partOfGrid, double* topBorderPlane, double*
     }
 }
 
-void WaitDataFromNeighbors(int currentRank, int numberOfProcesses, MPI_Request* bottomRecvRequest, MPI_Request* topRecvRequest) {
+void WaitDataFromNeighbors(int currentRank, int numberOfProcesses, MPI_Request* bottomRecvRequest, MPI_Request* topRecvRequest,
+                           MPI_Request* topSendRequest, MPI_Request* bottomSendRequest) {
     if (currentRank != 0) {
+        MPI_Wait(topSendRequest, MPI_STATUSES_IGNORE);
         MPI_Wait(bottomRecvRequest, MPI_STATUSES_IGNORE);
     }
     if (currentRank != numberOfProcesses - 1) {
+        MPI_Wait(bottomSendRequest, MPI_STATUSES_IGNORE);
         MPI_Wait(topRecvRequest, MPI_STATUSES_IGNORE);
     }
 }
@@ -164,7 +173,7 @@ void CompareResult(double* partOfGrid, int* countOfPlanes, int currentRank) {
     double distanceCoordY = CalculateDistanceBetweenPoints(NUMBER_OF_POINTS_Y);
     double distanceCoordZ = CalculateDistanceBetweenPoints(NUMBER_OF_POINTS_Z);
 
-    double maxDifference = DBL_MIN;
+    double maxDifference = 0;
     int numberOfPlanesXY = countOfPlanes[currentRank];
 
     int handledBlocks = 0;
@@ -251,7 +260,7 @@ void CalculateBoundaryPart(double* partOfGrid, int numberOfPlanesXY, int handled
 
                 double localX = GetCurrentCoordinateValue(AREA_START_COORDINATE, k, distanceCoordX);
                 double localY = GetCurrentCoordinateValue(AREA_START_COORDINATE, j, distanceCoordY);
-                double localZ = GetCurrentCoordinateValue(AREA_START_COORDINATE, handledBlocks, distanceCoordZ);
+                double localZ = GetCurrentCoordinateValue(AREA_START_COORDINATE, firstIndexZ + handledBlocks, distanceCoordZ);
                 double rightPartValue = CalculateRightPartOfEquationValue(localX, localY, localZ);
 
                 double previousValue = partOfGrid[Get3DGridPosition(firstIndexZ, j, k)];
@@ -277,12 +286,13 @@ void CalculateBoundaryPart(double* partOfGrid, int numberOfPlanesXY, int handled
 
                 double localX = GetCurrentCoordinateValue(AREA_START_COORDINATE, k, distanceCoordX);
                 double localY = GetCurrentCoordinateValue(AREA_START_COORDINATE, j, distanceCoordY);
-                double localZ = GetCurrentCoordinateValue(AREA_START_COORDINATE, handledBlocks, distanceCoordZ);
+                double localZ = GetCurrentCoordinateValue(AREA_START_COORDINATE, lastIndexZ + handledBlocks, distanceCoordZ);
                 double rightPartValue = CalculateRightPartOfEquationValue(localX, localY, localZ);
 
                 double previousValue = partOfGrid[Get3DGridPosition(lastIndexZ, j, k)];
                 partOfGrid[Get3DGridPosition(lastIndexZ, j, k)] = leftMultiplier *
                                                                    ((sumZ / sqrDistanceZ + sumY / sqrDistanceY + sumX / sqrDistanceX) - rightPartValue);
+
                 double currentValue = partOfGrid[Get3DGridPosition(lastIndexZ, j, k)];
                 maxDifference = std::max(maxDifference, fabs(currentValue - previousValue));
             }
@@ -290,7 +300,7 @@ void CalculateBoundaryPart(double* partOfGrid, int numberOfPlanesXY, int handled
     }
 }
 
-void IterativeProcessOfJacobiAlgorithm(double* partOfGrid, int* countOfPlanes, int currentRank, int numberOfProcesses) {
+double IterativeProcessOfJacobiAlgorithm(double* partOfGrid, int* countOfPlanes, int currentRank, int numberOfProcesses) {
     double distanceCoordX = CalculateDistanceBetweenPoints(NUMBER_OF_POINTS_X);
     double distanceCoordY = CalculateDistanceBetweenPoints(NUMBER_OF_POINTS_Y);
     double distanceCoordZ = CalculateDistanceBetweenPoints(NUMBER_OF_POINTS_Z);
@@ -318,7 +328,7 @@ void IterativeProcessOfJacobiAlgorithm(double* partOfGrid, int* countOfPlanes, i
         CalculateInnerPart(partOfGrid, numberOfPlanesXY, handledBlocks, distanceCoordX, distanceCoordY, distanceCoordZ,
                            leftMultiplier, maxDifference);
 
-        WaitDataFromNeighbors(currentRank, numberOfProcesses, &bottomRecvRequest, &topRecvRequest);
+        WaitDataFromNeighbors(currentRank, numberOfProcesses, &bottomRecvRequest, &topRecvRequest, &topSendRequest, &bottomSendRequest);
 
         CalculateBoundaryPart(partOfGrid, numberOfPlanesXY, handledBlocks, distanceCoordX, distanceCoordY, distanceCoordZ,
                               leftMultiplier, topBorderPlane, bottomBorderPlane, maxDifference, currentRank,
@@ -334,10 +344,12 @@ void IterativeProcessOfJacobiAlgorithm(double* partOfGrid, int* countOfPlanes, i
             break;
         }
     }
+    double end = MPI_Wtime();
     CompareResult(partOfGrid, countOfPlanes, currentRank);
 
     delete[] topBorderPlane;
     delete[] bottomBorderPlane;
+    return end;
 }
 
 int CalculateProcessNumberOfPlanes(int currentRank, int numberOfProcesses) {
@@ -378,8 +390,8 @@ int main(int argc, char** argv) {
 
     double* partOfGrid = CreatePartOfGridWithPoints(countOfPlanes, currentRank);
     double start = MPI_Wtime();
-    IterativeProcessOfJacobiAlgorithm(partOfGrid, countOfPlanes, currentRank, numberOfProcesses);
-    double end = MPI_Wtime();
+    double end = IterativeProcessOfJacobiAlgorithm(partOfGrid, countOfPlanes, currentRank, numberOfProcesses);
+
     if (currentRank == 0) {
         std::cout << "Elapsed time: " << end - start << " [sec]\n";
     }
