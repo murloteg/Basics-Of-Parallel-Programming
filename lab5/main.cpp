@@ -10,8 +10,8 @@
 typedef int task_complexity_t;
 
 enum Consts {
-    MAX_TASK_COMPLEXITY = 1,
-    ACCELERATION_PARAMETER = 1,
+    MIN_TASK_COMPLEXITY = 1,
+    MAX_TASK_COMPLEXITY = 5,
     NUMBER_OF_TASKS = 30
 };
 
@@ -31,26 +31,37 @@ std::condition_variable executorCondVar;
 std::atomic<bool> isExecutorInterrupted(false);
 std::atomic<bool> isRequesterInterrupted(false);
 
-int GenerateRandomValue() {
+/* task describes by integer value (time to sleep) */
+int GenerateRandomTask() {
     std::random_device device;
     std::mt19937 range(device());
     std::uniform_int_distribution<std::mt19937::result_type> distribution(1, MAX_TASK_COMPLEXITY);
     return (int) distribution(range);
 }
 
-/* task describes by integer value (time to sleep) */
-task_complexity_t CreateTask() {
-    task_complexity_t taskComplexity = GenerateRandomValue();
-    return taskComplexity;
-}
-
-void CreateTaskList(std::vector<task_complexity_t>& taskList) {
+void CreateRandomTaskList(std::vector<task_complexity_t>& taskList) {
     for (int i = 0; i < NUMBER_OF_TASKS; ++i) {
-        taskList.push_back(CreateTask());
+        taskList.push_back(GenerateRandomTask());
     }
 }
 
-void ExecuteTask(std::vector<task_complexity_t>& taskList, int rank, int& totalSum) {
+void CreateDeterminedTaskList(std::vector<task_complexity_t>& taskList, int numberOfProcesses) {
+    int taskComplexity = MIN_TASK_COMPLEXITY;
+    int currentRank = 0;
+    int requiredTasksForProcess = NUMBER_OF_TASKS / numberOfProcesses;
+    while (taskList.size() < NUMBER_OF_TASKS) {
+        for (int i = 0; i < requiredTasksForProcess; ++i) {
+            taskList.push_back(2 * taskComplexity);
+        }
+        if (currentRank < NUMBER_OF_TASKS % numberOfProcesses) {
+            taskList.push_back(2 * taskComplexity);
+        }
+        ++taskComplexity;
+        ++currentRank;
+    }
+}
+
+void ExecuteTask(std::vector<task_complexity_t>& taskList, int rank, int& tasksTimeTakenByProcess) {
     while (!isExecutorInterrupted) {
         std::unique_lock<std::mutex> uniqueLock(mutex);
         executorCondVar.wait(uniqueLock);
@@ -60,7 +71,7 @@ void ExecuteTask(std::vector<task_complexity_t>& taskList, int rank, int& totalS
             taskList.pop_back();
 //            std::cout << "Rank: " << rank << " executing task with complexity: " << taskComplexity << "\n";
             sleep(taskComplexity);
-            totalSum += taskComplexity;
+            tasksTimeTakenByProcess += taskComplexity;
         }
         uniqueLock.unlock();
 
@@ -78,7 +89,7 @@ void SendTask(std::vector<task_complexity_t>& taskList, int rank) {
             break;
         }
 
-        std::cout << "Rank: " << rank << " got signal from process: " << requesterRank << "\n";
+//        std::cout << "Rank: " << rank << " got signal from process: " << requesterRank << "\n";
         task_complexity_t task = EMPTY_TASK;
 
         mutex.lock();
@@ -88,28 +99,28 @@ void SendTask(std::vector<task_complexity_t>& taskList, int rank) {
         }
         mutex.unlock();
         MPI_Send(&task, 1, MPI_INT, requesterRank, RESPONSE_TAG, MPI_COMM_WORLD);
-        std::cout << "Rank: " << rank << " trying to response to process: " << requesterRank << "\n";
+//        std::cout << "Rank: " << rank << " trying to response to process: " << requesterRank << "\n";
     }
 }
 
 void RequestTask(std::vector<task_complexity_t>& taskList, int rank, int numberOfProcesses) {
     while (!isRequesterInterrupted) {
-        bool isQueueEmpty = false;
+        bool isTaskListEmpty = false;
         mutex.lock();
         if (taskList.empty()) {
-            isQueueEmpty = true;
+            isTaskListEmpty = true;
 //            std::cout << "Rank: " << rank << " trying to request some task...\n";
         }
         mutex.unlock();
 
-        if (isQueueEmpty) {
+        if (isTaskListEmpty) {
             int failedResponsesCounter = 0;
             for (int i = 0; i < numberOfProcesses; ++i) {
                 if (rank != i) {
                     MPI_Send(&rank, 1, MPI_INT, i, REQUEST_TAG, MPI_COMM_WORLD);
                     task_complexity_t responseTask;
                     MPI_Recv(&responseTask, 1, MPI_INT, i, RESPONSE_TAG, MPI_COMM_WORLD, MPI_STATUSES_IGNORE);
-                    std::cout << "Rank: " << rank << " received task with complexity: " << responseTask << " from process: " << i << "\n";
+//                    std::cout << "Rank: " << rank << " received task with complexity: " << responseTask << " from process: " << i << "\n";
                     if (responseTask == EMPTY_TASK) {
                         ++failedResponsesCounter;
                     } else {
@@ -123,7 +134,7 @@ void RequestTask(std::vector<task_complexity_t>& taskList, int rank, int numberO
 
             if (failedResponsesCounter == numberOfProcesses - 1) {
                 MPI_Barrier(MPI_COMM_WORLD);
-                std::cout << "Rank: " << rank << " finishing all threads...\n";
+//                std::cout << "Rank: " << rank << " finishing all threads...\n";
                 isRequesterInterrupted = true;
                 executorCondVar.notify_all();
                 int status = FINISH_PROCESS;
@@ -153,9 +164,16 @@ void DebugPrintVector(std::vector<task_complexity_t>& taskList, int rank) {
     }
 }
 
+int CalculateTotalTasksComplexity(std::vector<task_complexity_t>& taskList) {
+    int totalComplexity = 0;
+    for (int i : taskList) {
+        totalComplexity += i;
+    }
+    return totalComplexity;
+}
+
 std::vector<task_complexity_t> DistributeTasks(std::vector<task_complexity_t>& taskList, int rank, int numberOfProcesses) {
     int* numberOfTasksArray = CreateNumberOfTasksArray(numberOfProcesses);
-
     /* [DEBUG] Distribution of tasks [DEBUG] */
 //    if (rank == 0) {
 //        for (int i = 0; i < numberOfProcesses; ++i) {
@@ -172,7 +190,6 @@ std::vector<task_complexity_t> DistributeTasks(std::vector<task_complexity_t>& t
             int requiredTasks = numberOfTasksArray[i];
             for (int j = 0; j < requiredTasks; ++j) {
                 tasks[j] = taskList.back();
-                tasks[j] += ACCELERATION_PARAMETER * i;
                 taskList.pop_back();
             }
             MPI_Send(tasks, requiredTasks, MPI_INT, i, i, MPI_COMM_WORLD);
@@ -183,6 +200,7 @@ std::vector<task_complexity_t> DistributeTasks(std::vector<task_complexity_t>& t
 
     /* Create a vector from array */
     std::vector<task_complexity_t> distributedTaskList(tasks, tasks + numberOfTasksArray[rank]);
+    std::cout << "Total complexity for rank: <" << rank << "> is: " << CalculateTotalTasksComplexity(distributedTaskList) << " sec.\n";
 
     delete[] tasks;
     delete[] numberOfTasksArray;
@@ -204,7 +222,9 @@ int main(int argc, char** argv) {
     std::vector<task_complexity_t> taskList;
     taskList.resize(0);
     if (rank == 0) {
-        CreateTaskList(taskList);
+//        CreateRandomTaskList(taskList);
+        CreateDeterminedTaskList(taskList, numberOfProcesses);
+        std::cout << "Summary complexity: " << CalculateTotalTasksComplexity(taskList) << " sec.\n";
     }
     MPI_Barrier(MPI_COMM_WORLD);
 
@@ -217,8 +237,8 @@ int main(int argc, char** argv) {
     }
     */
 
-    int totalSum = 0;
-    std::thread executorThread(ExecuteTask, std::ref(taskList), rank, std::ref(totalSum));
+    int tasksTimeTakenByProcess = 0;
+    std::thread executorThread(ExecuteTask, std::ref(taskList), rank, std::ref(tasksTimeTakenByProcess));
     std::thread senderThread(SendTask, std::ref(taskList), rank);
     std::thread requesterThread(RequestTask, std::ref(taskList), rank, numberOfProcesses);
 
@@ -226,10 +246,16 @@ int main(int argc, char** argv) {
     senderThread.join();
     requesterThread.join();
 
-    std::cout << "Process with rank: " << rank << " slept summary " << totalSum << " sec.\n";
+    std::cout << "Process with rank: <" << rank << "> slept summary " << tasksTimeTakenByProcess << " sec.\n";
     double end = MPI_Wtime();
     if (rank == numberOfProcesses - 1) {
         std::cout << "Elapsed time: " << end - start << "\n";
+    }
+
+    int allProcessesTime = 0;
+    MPI_Allreduce(&tasksTimeTakenByProcess, &allProcessesTime, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+    if (rank == numberOfProcesses - 1) {
+        std::cout << "[Total tasks time taken by all processes " << allProcessesTime << " sec.]\n";
     }
 
     CleanUp(taskList);
