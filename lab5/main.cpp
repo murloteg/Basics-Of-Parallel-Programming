@@ -29,7 +29,6 @@ std::mutex mutex;
 std::condition_variable executorCondVar;
 
 std::atomic<bool> isExecutorInterrupted(false);
-std::atomic<bool> isSenderInterrupted(false);
 std::atomic<bool> isRequesterInterrupted(false);
 
 int GenerateRandomValue() {
@@ -51,36 +50,38 @@ void CreateTaskList(std::vector<task_complexity_t>& taskList) {
     }
 }
 
-void ExecuteTask(std::vector<task_complexity_t>& taskList, int rank) {
+void ExecuteTask(std::vector<task_complexity_t>& taskList, int rank, int& totalSum) {
     while (!isExecutorInterrupted) {
         std::unique_lock<std::mutex> uniqueLock(mutex);
         executorCondVar.wait(uniqueLock);
+
         if (!taskList.empty()) {
             task_complexity_t taskComplexity = taskList.back();
             taskList.pop_back();
-            std::cout << "Rank: " << rank << " executing task with complexity: " << taskComplexity << "\n";
+//            std::cout << "Rank: " << rank << " executing task with complexity: " << taskComplexity << "\n";
             sleep(taskComplexity);
+            totalSum += taskComplexity;
         }
         uniqueLock.unlock();
-    }
-    if (isRequesterInterrupted) {
-        isExecutorInterrupted = true;
+
+        if (isRequesterInterrupted) {
+            isExecutorInterrupted = true;
+        }
     }
 }
 
 void SendTask(std::vector<task_complexity_t>& taskList, int rank) {
-    while (!isSenderInterrupted) {
+    while (true) {
         int requesterRank;
         MPI_Recv(&requesterRank, 1, MPI_INT, MPI_ANY_SOURCE, REQUEST_TAG, MPI_COMM_WORLD, MPI_STATUSES_IGNORE);
-//        if () {
-//
-//        }
-//
+        if (requesterRank == FINISH_PROCESS) {
+            break;
+        }
+
         std::cout << "Rank: " << rank << " got signal from process: " << requesterRank << "\n";
         task_complexity_t task = EMPTY_TASK;
-        //
+
         mutex.lock();
-        std::cout << "Rank: " << rank << " checked his task queue\n";
         if (!taskList.empty()) {
             task = taskList.back();
             taskList.pop_back();
@@ -88,17 +89,20 @@ void SendTask(std::vector<task_complexity_t>& taskList, int rank) {
         mutex.unlock();
         MPI_Send(&task, 1, MPI_INT, requesterRank, RESPONSE_TAG, MPI_COMM_WORLD);
         std::cout << "Rank: " << rank << " trying to response to process: " << requesterRank << "\n";
-        if (isRequesterInterrupted) {
-            isSenderInterrupted = true;
-        }
     }
 }
 
 void RequestTask(std::vector<task_complexity_t>& taskList, int rank, int numberOfProcesses) {
     while (!isRequesterInterrupted) {
+        bool isQueueEmpty = false;
         mutex.lock();
         if (taskList.empty()) {
-            std::cout << "Rank: " << rank << " trying to request some task...\n";
+            isQueueEmpty = true;
+//            std::cout << "Rank: " << rank << " trying to request some task...\n";
+        }
+        mutex.unlock();
+
+        if (isQueueEmpty) {
             int failedResponsesCounter = 0;
             for (int i = 0; i < numberOfProcesses; ++i) {
                 if (rank != i) {
@@ -109,24 +113,25 @@ void RequestTask(std::vector<task_complexity_t>& taskList, int rank, int numberO
                     if (responseTask == EMPTY_TASK) {
                         ++failedResponsesCounter;
                     } else {
+                        mutex.lock();
                         taskList.push_back(responseTask);
+                        mutex.unlock();
                         break;
                     }
                 }
             }
 
             if (failedResponsesCounter == numberOfProcesses - 1) {
-                std::cout << "All requests from rank: " << rank << " were ignored\n";
-                // TODO: check other processes and exit if needed.
                 MPI_Barrier(MPI_COMM_WORLD);
-                std::cout << "Rank: " << rank << " finished all threads\n";
+                std::cout << "Rank: " << rank << " finishing all threads...\n";
                 isRequesterInterrupted = true;
+                executorCondVar.notify_all();
+                int status = FINISH_PROCESS;
+                MPI_Send(&status, 1, MPI_INT, rank, REQUEST_TAG, MPI_COMM_WORLD);
             }
-        }
-        else {
+        } else {
             executorCondVar.notify_all();
         }
-        mutex.unlock();
     }
 }
 
@@ -152,13 +157,13 @@ std::vector<task_complexity_t> DistributeTasks(std::vector<task_complexity_t>& t
     int* numberOfTasksArray = CreateNumberOfTasksArray(numberOfProcesses);
 
     /* [DEBUG] Distribution of tasks [DEBUG] */
-    if (rank == 0) {
-        for (int i = 0; i < numberOfProcesses; ++i) {
-            std::cout << "Rank <" << i << ">: " << numberOfTasksArray[i] << "\n";
-        }
-        std::cout << "BEFORE DISTRIBUTING:\n";
-        DebugPrintVector(taskList, rank);
-    }
+//    if (rank == 0) {
+//        for (int i = 0; i < numberOfProcesses; ++i) {
+//            std::cout << "Rank <" << i << ">: " << numberOfTasksArray[i] << "\n";
+//        }
+//        std::cout << "BEFORE DISTRIBUTING:\n";
+//        DebugPrintVector(taskList, rank);
+//    }
 
     std::vector<task_complexity_t> temporaryList;
     task_complexity_t* tasks = new task_complexity_t[numberOfTasksArray[rank]];
@@ -212,7 +217,8 @@ int main(int argc, char** argv) {
     }
     */
 
-    std::thread executorThread(ExecuteTask, std::ref(taskList), rank);
+    int totalSum = 0;
+    std::thread executorThread(ExecuteTask, std::ref(taskList), rank, std::ref(totalSum));
     std::thread senderThread(SendTask, std::ref(taskList), rank);
     std::thread requesterThread(RequestTask, std::ref(taskList), rank, numberOfProcesses);
 
@@ -220,6 +226,7 @@ int main(int argc, char** argv) {
     senderThread.join();
     requesterThread.join();
 
+    std::cout << "Process with rank: " << rank << " slept summary " << totalSum << " sec.\n";
     double end = MPI_Wtime();
     if (rank == numberOfProcesses - 1) {
         std::cout << "Elapsed time: " << end - start << "\n";
