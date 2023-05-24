@@ -10,14 +10,15 @@
 typedef int task_complexity_t;
 
 enum Consts {
-    MAX_TASK_COMPLEXITY = 2,
+    MAX_TASK_COMPLEXITY = 1,
     ACCELERATION_PARAMETER = 1,
-    NUMBER_OF_TASKS = 40
+    NUMBER_OF_TASKS = 30
 };
 
 enum MPIConsts {
     REQUEST_TAG = 111,
-    RESPONSE_TAG = 222
+    RESPONSE_TAG = 222,
+    FINISH_PROCESS = -1
 };
 
 enum TaskStatuses {
@@ -25,13 +26,11 @@ enum TaskStatuses {
 };
 
 std::mutex mutex;
+std::condition_variable executorCondVar;
 
 std::atomic<bool> isExecutorInterrupted(false);
 std::atomic<bool> isSenderInterrupted(false);
 std::atomic<bool> isRequesterInterrupted(false);
-
-std::atomic<bool> gotSignalFromAnotherProcess(false);
-std::atomic<bool> sentSignalToAnotherProcess(false);
 
 int GenerateRandomValue() {
     std::random_device device;
@@ -54,19 +53,18 @@ void CreateTaskList(std::vector<task_complexity_t>& taskList) {
 
 void ExecuteTask(std::vector<task_complexity_t>& taskList, int rank) {
     while (!isExecutorInterrupted) {
-        if (!gotSignalFromAnotherProcess && !sentSignalToAnotherProcess) {
-            mutex.lock();
-            if (!taskList.empty()) {
-                task_complexity_t taskComplexity = taskList.back();
-                taskList.pop_back();
-                std::cout << "From rank: " << rank << "; task complexity: " << taskComplexity << "\n";
-                sleep(taskComplexity);
-            }
-            mutex.unlock();
+        std::unique_lock<std::mutex> uniqueLock(mutex);
+        executorCondVar.wait(uniqueLock);
+        if (!taskList.empty()) {
+            task_complexity_t taskComplexity = taskList.back();
+            taskList.pop_back();
+            std::cout << "Rank: " << rank << " executing task with complexity: " << taskComplexity << "\n";
+            sleep(taskComplexity);
         }
-        if (isRequesterInterrupted) {
-            isExecutorInterrupted = true;
-        }
+        uniqueLock.unlock();
+    }
+    if (isRequesterInterrupted) {
+        isExecutorInterrupted = true;
     }
 }
 
@@ -74,19 +72,21 @@ void SendTask(std::vector<task_complexity_t>& taskList, int rank) {
     while (!isSenderInterrupted) {
         int requesterRank;
         MPI_Recv(&requesterRank, 1, MPI_INT, MPI_ANY_SOURCE, REQUEST_TAG, MPI_COMM_WORLD, MPI_STATUSES_IGNORE);
-        gotSignalFromAnotherProcess = true;
+//        if () {
+//
+//        }
+//
         std::cout << "Rank: " << rank << " got signal from process: " << requesterRank << "\n";
         task_complexity_t task = EMPTY_TASK;
-        if (!sentSignalToAnotherProcess) {
-            mutex.lock();
-            if (!taskList.empty()) {
-                task = taskList.back();
-                taskList.pop_back();
-            }
-            mutex.unlock();
+        //
+        mutex.lock();
+        std::cout << "Rank: " << rank << " checked his task queue\n";
+        if (!taskList.empty()) {
+            task = taskList.back();
+            taskList.pop_back();
         }
+        mutex.unlock();
         MPI_Send(&task, 1, MPI_INT, requesterRank, RESPONSE_TAG, MPI_COMM_WORLD);
-        gotSignalFromAnotherProcess = false;
         std::cout << "Rank: " << rank << " trying to response to process: " << requesterRank << "\n";
         if (isRequesterInterrupted) {
             isSenderInterrupted = true;
@@ -103,15 +103,13 @@ void RequestTask(std::vector<task_complexity_t>& taskList, int rank, int numberO
             for (int i = 0; i < numberOfProcesses; ++i) {
                 if (rank != i) {
                     MPI_Send(&rank, 1, MPI_INT, i, REQUEST_TAG, MPI_COMM_WORLD);
-                    sentSignalToAnotherProcess = true;
-                    task_complexity_t responseTask = EMPTY_TASK;
+                    task_complexity_t responseTask;
                     MPI_Recv(&responseTask, 1, MPI_INT, i, RESPONSE_TAG, MPI_COMM_WORLD, MPI_STATUSES_IGNORE);
                     std::cout << "Rank: " << rank << " received task with complexity: " << responseTask << " from process: " << i << "\n";
                     if (responseTask == EMPTY_TASK) {
                         ++failedResponsesCounter;
                     } else {
                         taskList.push_back(responseTask);
-                        sentSignalToAnotherProcess = false;
                         break;
                     }
                 }
@@ -120,8 +118,13 @@ void RequestTask(std::vector<task_complexity_t>& taskList, int rank, int numberO
             if (failedResponsesCounter == numberOfProcesses - 1) {
                 std::cout << "All requests from rank: " << rank << " were ignored\n";
                 // TODO: check other processes and exit if needed.
+                MPI_Barrier(MPI_COMM_WORLD);
+                std::cout << "Rank: " << rank << " finished all threads\n";
                 isRequesterInterrupted = true;
             }
+        }
+        else {
+            executorCondVar.notify_all();
         }
         mutex.unlock();
     }
