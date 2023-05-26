@@ -24,7 +24,7 @@ enum MPIConsts {
 };
 
 enum TaskStatuses {
-    EMPTY_TASK = -1
+    EMPTY_TASK = 0
 };
 
 std::mutex mutex;
@@ -37,14 +37,15 @@ void ExecuteTask(std::vector<task_complexity_t>& taskList, int rank, int& timeTa
     while (!isExecutorInterrupted) {
         std::unique_lock<std::mutex> uniqueLock(mutex);
         executorCondVar.wait(uniqueLock);
+        task_complexity_t taskComplexity = EMPTY_TASK;
         if (!taskList.empty()) {
-            task_complexity_t taskComplexity = taskList.back();
+            taskComplexity = taskList.back();
             taskList.pop_back();
 //            std::cout << "Rank: " << rank << " executing task with complexity: " << taskComplexity << "\n";
-            sleep(taskComplexity);
             timeTakenByProcess += taskComplexity;
         }
         uniqueLock.unlock();
+        sleep(taskComplexity);
 
         if (isRequesterInterrupted) {
             isExecutorInterrupted = true;
@@ -284,8 +285,8 @@ int main(int argc, char** argv) {
     std::vector<task_complexity_t> taskList;
     taskList.resize(0);
 
-//    PrepareFirstScenario(taskList, rank, numberOfProcesses);
-    PrepareSecondScenario(taskList, rank, numberOfProcesses);
+    PrepareFirstScenario(taskList, rank, numberOfProcesses);
+//    PrepareSecondScenario(taskList, rank, numberOfProcesses);
 
     double start = MPI_Wtime();
     int timeTakenByProcess = 0;
